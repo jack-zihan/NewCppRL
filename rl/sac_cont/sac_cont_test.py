@@ -17,7 +17,7 @@ act_randomly = True
 # act_randomly = False
 
 device = 'cpu'
-pt_path = f'../../ckpt/sac_cont/2024-09-08_22-43-52_wd1e-4_polyak9997/t[03750]_r[2758.92=2736.49~2813.41].pt'
+pt_path = f'/home/lzh/NewCppRL/ckpt/sac_cont/0909/sac_our_model_con3_t[02350]_r[2703.08=2662.85~2782.18].pt'
 actor_critic = torch.load(pt_path).to(device)
 actor = actor_critic[0].to(device)
 

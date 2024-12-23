@@ -72,8 +72,8 @@ class NumericalRange:
     def mode(self):
         return self.max - self.min
 
-
 class MowerAgent:
+    # 这种放在前面的是类变量，各个类是相通的
     width = 4
     length = 6
     occupancy = math.hypot(width, length)
@@ -110,6 +110,9 @@ class MowerAgent:
         ])
 
     def control(self, acc: float, steer: float):
+        """
+        根据线速度和角速度以及动力学模型，计算新的x,y
+        """
         self.last_acc, self.last_steer = acc, steer
         self.direction = (self.direction + steer) % 360
         dx = acc * math.cos(math.radians(self.direction))
@@ -121,3 +124,12 @@ class MowerAgent:
         self.x, self.y = position
         self.last_acc, self.last_steer = 0., 0.
         self.direction = direction
+
+class RealAgent(MowerAgent):
+    def control(self, new_position: tuple[float, float], new_direction: float):
+        """
+        直接设置机器人的新位置和方向。
+        """
+        self.x, self.y = new_position
+        self.direction = new_direction % 360  # 确保方向在 0-360 度之间
+        self.last_acc, self.last_steer = 0., 0.

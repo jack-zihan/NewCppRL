@@ -12,3 +12,7 @@ gymnasium.envs.registration.register(
     id="Pasture-v3",
     entry_point="envs.cpp_env_v3:CppEnv",
 )
+gymnasium.envs.registration.register(
+    id="Pasture-real",
+    entry_point="envs.cpp_env_real:CppEnv",
+)

@@ -10,7 +10,7 @@ env:
     use_sgcnn: True
     use_global_obs: True
     use_apf: True
-    use_box_boundary: True # False # True
+    use_box_boundary: True
     use_traj: True
     noise_position: null
     noise_direction: null

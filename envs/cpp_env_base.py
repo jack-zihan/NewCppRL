@@ -570,28 +570,95 @@ class CppEnvBase(gym.Env):
     ) -> tuple[dict[str, np.ndarray | float], dict[Any, Any]]:
         super().reset(seed=seed)
         # Parse Options
-        weed_dist = None
-        weed_num = None
-        map_id = None
-        if isinstance(options, dict):
-            if 'weed_dist' in options:
-                weed_dist = options['weed_dist']
-            if 'weed_num' in options:
-                weed_num = options['weed_num']
-            if 'map_id' in options:
-                map_id = options['map_id']
-        if weed_dist is None:
-            weed_dist = 'uniform'
-        if weed_num is None:
-            weed_num = 100
-        if map_id is None:
-            map_id = self.np_random.integers(0, len(self.map_names) - 1)
+        options = options or {}
+        weed_dist = options.get('weed_dist', 'uniform')
+        weed_num = options.get('weed_num', 100)
+        map_id = options.get('map_id', self.np_random.integers(0, len(self.map_names) - 1))
+        specific_scenario_dir = options.get('specific_scenario_dir', None)
+        initial_position = options.get('initial_position', None)
+        initial_direction = options.get('initial_direction', None)
+
         # Check Parameters' Range
         assert weed_dist in {'uniform', 'gaussian'}
         assert 0 <= map_id <= len(self.map_names) - 1
+
+        if specific_scenario_dir is not None:
+            self.load_maps_from_directory(specific_scenario_dir)
+            box_init_agent_position, box_init_agent_theta = self.initialize_boudingbox()
+        else:
+            self.generate_frontier_maps(map_id)
+            box_init_agent_position, box_init_agent_theta = self.initialize_boudingbox()
+            self.randomize_obstacles()
+            self.initialize_weeds(weed_dist, weed_num)
+
+        self.agent.reset(
+            position=initial_position if initial_position is not None else box_init_agent_position,
+            direction=initial_direction if initial_direction is not None else box_init_agent_theta,
+        )
+
+        # Initialize other attributes
+        self.map_trajectory = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
+        self.map_mist = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
+
+        # Update map_frontier and map_mist based on agent's initial position
+        self.update_maps_after_reset()
+
+        # Get observation
+        self.weed_num_t = self.map_weed.sum(dtype=np.int32)
+        self.frontier_area_t = self.map_frontier.sum(dtype=np.int32)
+        self.frontier_tv_t = total_variation(self.map_frontier.astype(np.int32))
+        self.t = 1
+        self.steer_t = 0.
+
+        obs = self.observation()
+        return obs, {}
+
+    # def load_maps_from_directory(self, directory: Union[str, Path]):
+    #     directory = Path(directory)
+    #     self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+    #     self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+    #     self.map_weed = (cv2.imread(str(directory / 'map_weed.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+    #     self.map_weed[self.map_frontier == 0] = 0 # 只有map_frontier存在的地方weed才可能存在
+    #     self.dimensions = self.map_frontier.shape[::-1]  # width, height
+    #     self.map_frontier_full = self.map_frontier.copy()
+    #     self.weed_num = self.map_weed.sum()
+    #
+    #     self.initialize_map_weed_noisy()
+    #     self.initialize_map_weed_ori()
+
+    def load_maps_from_directory(self, directory: Union[str, Path]):
+        directory = Path(directory)
+        self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+        self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+        self.map_weed = (cv2.imread(str(directory / 'map_weed.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+
+        # 确保杂草只存在于农田区域
+        self.map_weed[self.map_frontier == 0] = 0
+
+        # 对障碍物掩码进行轻微膨胀，防止杂草靠近障碍物
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (29, 29))  # 可以根据需要调整内核大小
+        dilated_obstacle = cv2.dilate(self.map_obstacle, kernel, iterations=1)
+
+        # 将膨胀后的障碍物区域中的杂草设置为零
+        self.map_weed[dilated_obstacle > 0] = 0
+
+        self.dimensions = self.map_frontier.shape[::-1]  # width, height
+        self.map_frontier_full = self.map_frontier.copy()
+        self.weed_num = self.map_weed.sum()
+
+        self.initialize_map_weed_noisy()
+        self.initialize_map_weed_ori()
+
+    def generate_frontier_maps(self, map_id: int):
+        # Read self.map_frontier from map_dir / map_names[map_id]
         self.map_id = map_id
-        self.map_frontier: np.ndarray = (  # map_frontier是农田，这里在计算boudingbox TODO: 有时间细致理解一下这里的代码
-                cv2.imread(str(self.map_dir / self.map_names[self.map_id])).sum(axis=-1) > 0).astype(np.uint8)
+        self.map_frontier: np.ndarray = (
+            cv2.imread(str(self.map_dir / self.map_names[self.map_id])).sum(axis=-1) > 0).astype(np.uint8)
+        self.dimensions = self.map_frontier.shape[::-1]  # width, height
+        self.map_frontier_full = self.map_frontier.copy()
+
+    def initialize_boudingbox(self):
+        # Use self.map_frontier to find contours and set agent's initial position and orientation
         contours, _ = cv2.findContours(self.map_frontier, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=lambda a: cv2.contourArea(a), reverse=True)
         rect = cv2.minAreaRect(contours[0])
@@ -600,38 +667,34 @@ class CppEnvBase(gym.Env):
         box = np.roll(box, 4 - start_idx, 0)
         # (4, 1, 2)
         box = box.reshape((-1, 1, 2)).astype(np.int32)
-        self.min_area_rect = [box]
         pos_index = 0 if math.hypot(*(box[1, 0] - box[0, 0])) > math.hypot(*(box[2, 0] - box[1, 0])) else 1
-        position = (float(box[pos_index, 0, 0]), float(box[pos_index, 0, 1]))
+        box_init_agent_position = (float(box[pos_index, 0, 0]), float(box[pos_index, 0, 1]))
         theta_vector = box[pos_index + 1, 0] - box[pos_index, 0]
         theta_vector = theta_vector / math.hypot(*theta_vector)
-        theta = math.degrees(math.atan2(theta_vector[1], theta_vector[0]))
+        box_init_agent_theta = math.degrees(math.atan2(theta_vector[1], theta_vector[0]))
+        self.min_area_rect = [box]
+        self.contours = contours
+        return box_init_agent_position, box_init_agent_theta
 
-        # Initialize player
-        self.agent.reset(
-            position=position,
-            direction=theta,
-        )
-        # Initialize maps
-        self.map_trajectory = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        self.map_mist = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        # Randomize obstacles
-        if self.use_box_boundary:  # 外部画障碍物
+    def randomize_obstacles(self):
+        # Initialize self.map_obstacle
+        if self.use_box_boundary:
+            # Existing code to draw box boundary
             self.map_obstacle = np.ones((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
+            box = self.min_area_rect[0]
             r_center = 0.5 * (box[0, 0] + box[2, 0])
             vecs = [box[0, 0] - box[1, 0], box[1, 0] - box[2, 0]]
             wd_i = 0
             if abs(vecs[1][1]) < abs(vecs[1][0]):
                 wd_i = 0
             ht_i = (wd_i + 1) % 2
-            angle = math.atan(vecs[wd_i][1] / vecs[wd_i][0]) * 180.0 / math.pi
+            angle = math.atan2(vecs[wd_i][1], vecs[wd_i][0]) * 180.0 / math.pi
             width = math.hypot(*vecs[wd_i])
             height = math.hypot(*vecs[ht_i])
             width = max(width * 1.2, width + 60)  # 障碍物空间放大了1.2倍
             height = max(height * 1.2, height + 60)
-            rect_expanded = cv2.RotatedRect(r_center, (width, height), angle)
-            # sz = rect_expanded.size
-            box = rect_expanded.points()
+            rect_expanded = ((r_center[0], r_center[1]), (width, height), angle)
+            box = cv2.boxPoints(rect_expanded)
             start_idx = box.sum(axis=1).argmin()
             box = np.roll(box, 4 - start_idx, 0)
             # (4, 1, 2)
@@ -639,9 +702,11 @@ class CppEnvBase(gym.Env):
             cv2.fillPoly(self.map_obstacle, [box], color=(0,))
         else:
             self.map_obstacle = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
+
         num_obstacles = self.np_random.integers(*self.num_obstacles_range) if self.num_obstacles_range[1] > 0 else 0
         current_obstacle_num = 0
-        while current_obstacle_num < num_obstacles:  # 生成障碍物
+        while current_obstacle_num < num_obstacles:
+            # Existing code to generate random obstacles
             o_x = self.np_random.uniform(0 + 100, self.dimensions[0] - 100)
             o_y = self.np_random.uniform(0 + 100, self.dimensions[1] - 100)
             if self.map_obstacle[int(o_y), int(o_x)]:
@@ -656,30 +721,25 @@ class CppEnvBase(gym.Env):
             if dist2player < -2.0 * MowerAgent.length:
                 current_obstacle_num += 1
                 cv2.fillPoly(self.map_obstacle, [pts], color=(1.,))
-                pts = np.array(
-                    cv2.RotatedRect(center=(o_x, o_y), size=(o_len + 15, o_wid + 15), angle=angle).points(),  # 扩了15码
+                pts_expanded = np.array(
+                    cv2.RotatedRect(center=(o_x, o_y), size=(o_len + 15, o_wid + 15), angle=angle).points(),
                     dtype=np.int32
                 ).reshape((-1, 1, 2))
-                cv2.fillPoly(self.map_frontier, [pts], color=(0.,))
-        self.map_frontier_full = self.map_frontier.copy()  # map_frontier_full可用于获得地图的覆盖率
+                cv2.fillPoly(self.map_frontier, [pts_expanded], color=(0.,))
+
+    def initialize_weeds(self, weed_dist: str, weed_num: int):
         self.map_weed = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        if self.noise_weed:
-            self.map_weed_noisy = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        if isinstance(weed_num, float):  # 可以给比例
+        if isinstance(weed_num, float):
             weed_num = math.ceil(self.map_frontier.sum() * weed_num)
         self.weed_num = weed_num
         weed_count = 0
-        while weed_count < weed_num:  # TODO，这个有时间的话就改成小簇然后发芽的方法
+        while weed_count < weed_num:
             if weed_dist == 'uniform':
                 weed_x = self.np_random.integers(low=0, high=self.dimensions[0] - 1)
                 weed_y = self.np_random.integers(low=0, high=self.dimensions[1] - 1)
                 if self.map_frontier[weed_y, weed_x] and not self.map_weed[weed_y, weed_x]:
                     self.map_weed[weed_y, weed_x] = 1
                     weed_count += 1
-                    if self.noise_weed:
-                        delta_x = self.np_random.integers(low=-1, high=1)
-                        delta_y = self.np_random.integers(low=-1, high=1)
-                        self.map_weed_noisy[weed_y + delta_y, weed_x + delta_x] = 1
             else:
                 weed_x = self.np_random.normal(loc=0., scale=0.35, size=weed_num - weed_count)
                 weed_y = self.np_random.normal(loc=0., scale=0.35, size=weed_num - weed_count)
@@ -691,15 +751,29 @@ class CppEnvBase(gym.Env):
                     if self.map_frontier[weed_y[i], weed_x[i]] and not self.map_weed[weed_y[i], weed_x[i]]:
                         self.map_weed[weed_y[i], weed_x[i]] = 1
                         weed_count += 1
-                        if self.noise_weed:
-                            delta_x = self.np_random.integers(low=-1, high=1)
-                            delta_y = self.np_random.integers(low=-1, high=1)
-                            self.map_weed_noisy[weed_y[i] + delta_y, weed_x[i] + delta_x] = 1
-        cv2.fillPoly(self.map_weed, [self.agent.convex_hull.round().astype(np.int32)], color=(0.,))  # 小车位置boudingbox
+        self.initialize_map_weed_noisy()
+        self.initialize_map_weed_ori()
+
+    def initialize_map_weed_ori(self):
         if self.render_covered_weed:
             self.map_weed_ori = self.map_weed.copy()
-            # self.map_weed_ori = np.ones((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        # map_frontier和map_mist都要进行一次step的计算
+
+    def initialize_map_weed_noisy(self):
+        if self.noise_weed:
+            print("!!!!!!!!!!!!!!!")
+            self.map_weed_noisy = np.zeros_like(self.map_weed)
+            # Apply noise to self.map_weed to generate self.map_weed_noisy
+            weed_positions = np.argwhere(self.map_weed)
+            for weed_y, weed_x in weed_positions:
+                delta_x = self.np_random.integers(low=-1, high=1)
+                delta_y = self.np_random.integers(low=-1, high=1)
+                new_x = np.clip(weed_x + delta_x, 0, self.dimensions[0] - 1)
+                new_y = np.clip(weed_y + delta_y, 0, self.dimensions[1] - 1)
+                self.map_weed_noisy[new_y, new_x] = 1
+
+    def update_maps_after_reset(self):
+        # Update map_frontier and map_mist based on agent's initial position
+        cv2.fillPoly(self.map_weed, [self.agent.convex_hull.round().astype(np.int32)], color=(0.,))
         cv2.ellipse(img=self.map_frontier,
                     center=self.agent.position_discrete,
                     axes=(self.vision_length, self.vision_length),
@@ -710,27 +784,19 @@ class CppEnvBase(gym.Env):
                     thickness=-1, )
         cv2.ellipse(img=self.map_mist,
                     center=self.agent.position_discrete,
-                    axes=(self.vision_length + 1, self.vision_length + 1),  # vision_lenth+1就是迷雾探开范围
+                    axes=(self.vision_length + 1, self.vision_length + 1),
                     angle=self.agent.direction,
                     startAngle=-self.vision_angle / 2,
                     endAngle=self.vision_angle / 2,
                     color=(1.,),
                     thickness=-1, )
-        if not np.logical_and(self.map_frontier, self.map_mist).any():  # 最开始看不见，开个口看见
-            dist2player = cv2.pointPolygonTest(contours[0], self.agent.position, True)
+        if not np.logical_and(self.map_frontier, self.map_mist).any(): #视野中没有农田，则扩开
+            dist2player = cv2.pointPolygonTest(self.contours[0], self.agent.position, True)
             cv2.circle(img=self.map_mist,
                        center=self.agent.position_discrete,
                        radius=math.ceil(abs(dist2player) + 5),
                        color=(1.,),
                        thickness=-1, )
-        # Get observation
-        self.weed_num_t = self.map_weed.sum(dtype=np.int32)
-        self.frontier_area_t = self.map_frontier.sum(dtype=np.int32)
-        self.frontier_tv_t = total_variation(self.map_frontier.astype(np.int32))
-        obs = self.observation()
-        self.t = 1
-        self.steer_t = 0.
-        return obs, {}
 
     def render(self):
         if self.render_mode is None:

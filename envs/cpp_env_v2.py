@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
-
+import os
 import cv2
 import numpy as np
 from cpu_apf import cpu_apf_bool  # noqa
@@ -51,7 +51,7 @@ class CppEnv(CppEnvBase):
             map_weed_ = self.map_weed
         apf_frontier = np.logical_and(total_variation_mat(self.map_frontier), self.map_mist)
         apf_obstacle = np.logical_and(total_variation_mat(self.map_obstacle), self.map_mist)
-        apf_weed = np.logical_and(map_weed_, np.logical_not(self.map_frontier))
+        apf_weed = np.logical_and(map_weed_, np.logical_not(self.map_frontier)) # 这个没有问题，就是只看得到的杂草这个情况
         apf_trajectory = self.map_trajectory
         if self.use_apf:
             apf_frontier = self.get_discounted_apf(apf_frontier, 30)
@@ -201,10 +201,13 @@ class CppEnv(CppEnvBase):
 if __name__ == "__main__":
     if_render = True
     episodes = 3
+    real_map_dir = '/home/lzh/NewCppRL/envs/maps/real'
     env = CppEnv(
         render_mode='rgb_array' if if_render else None,
         # state_pixels=True,
         state_pixels=False,
+        # use_sgcnn=False,
+        # use_global_obs=False,
         # num_obstacles_range = [0, 0]
     )
     env: CppEnv = HumanRendering(env)  # 封装后，只接收render_mode="rgb_array"的env，使得step和reset的时候展示渲染图像
@@ -214,7 +217,8 @@ if __name__ == "__main__":
         obs, info = env.reset(seed=120, options={
             'weed_dist': 'gaussian',
             # 'map_id': 80,
-            "weed_num": 100
+            "weed_num": 100,
+            # "specific_scenario_dir": real_map_dir
         })
         env.action_space.seed(66)
         done = False
@@ -228,3 +232,17 @@ if __name__ == "__main__":
                 img = env.render()
 
     env.close()
+
+
+
+    #
+    # obs, info = env.reset(seed=120, options={
+    #     'weed_dist': 'gaussian',
+    #     # 'map_id': 80,
+    #     "weed_num": 100
+    # })
+    # os.makedirs(real_map_dir, exist_ok=True)
+    # cv2.imwrite(os.path.join(real_map_dir, 'map_frontier.png'), env.map_frontier * 255)
+    # cv2.imwrite(os.path.join(real_map_dir, 'map_obstacle.png'), env.map_obstacle * 255)
+    # cv2.imwrite(os.path.join(real_map_dir, 'map_weed.png'), env.map_weed * 255)
+    # print(f"Maps saved to {real_map_dir}")
