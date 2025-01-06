@@ -59,6 +59,26 @@ class CppEnvBase(gym.Env):
             noise_weed: Optional[float] = 0.0,
             map_dir: str = 'envs/maps/1-400',
     ):
+        """
+        初始化CppEnvBase环境类的实例。
+
+        参数:
+        action_type (str): 动作类型，可选值为'discrete'、'continuous'或'multi_discrete'。
+        render_mode (str): 渲染模式，可选值为'rgb_array'或'state_pixels'。
+        state_pixels (bool): 是否渲染第一视角。
+        state_size (tuple[int, int]): 状态图像的尺寸，默认为(128, 128)。
+        state_downsize (tuple[int, int]): 状态图像缩小后的尺寸，默认为(128, 128)。
+        num_obstacles_range (tuple[int, int]): 障碍物数量范围，默认为(5, 8)。
+        use_sgcnn (bool): 是否使用SG-CNN，默认为True。
+        use_global_obs (bool): 是否使用全局观测，默认为True。
+        use_apf (bool): 是否使用人工势场，默认为True。
+        use_box_boundary (bool): 在场景外是否绘制障碍物包裹，默认为True。
+        use_traj (bool): 是否使用轨迹，默认为True。
+        noise_position (Optional[float]): 位置噪声，默认为0.0。
+        noise_direction (Optional[float]): 方向噪声，默认为0.0。
+        noise_weed (Optional[float]): 杂草噪声，默认为0.0。
+        map_dir (str): 地图目录，默认为'envs/maps/1-400'。
+        """
         super().__init__()
         # Read maps
         self.map_dir = Path(__file__).parent.parent / map_dir
