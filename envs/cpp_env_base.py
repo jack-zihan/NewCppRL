@@ -1,871 +1,614 @@
+# main_env.py
+
 from __future__ import annotations
 
-import math
-import os
-from pathlib import Path
-from typing import Optional, Tuple, Union, Any, Sequence
+from typing import Optional, Tuple, Union, Dict, Any
 
 import cv2
 import gymnasium as gym
 import numpy as np
-import torch
-import torch.nn.functional as F
-from cpu_apf import cpu_apf_bool  # noqa
-from gymnasium.error import DependencyNotInstalled
+import math
+import pygame
+from pygame import gfxdraw
 
-from envs.utils import get_map_pasture_larger, MowerAgent, NumericalRange, total_variation, total_variation_mat
+import logging
+
+from envs.components.utils import MowerAgent, NumericalRange, total_variation_mat
+from envs.components.map_manager import MapManager
+from envs.components.reward_manager import RewardManager
+from envs.components.observation_manager import ObservationManager
 
 
 class CppEnvBase(gym.Env):
+    """
+    主环境类，管理环境交互、渲染和状态更新。
+    """
     metadata = {
-        "render_modes": [
-            "rgb_array",
-            "state_pixels",
-        ],
+        "render_modes": ["rgb_array", "state_pixels"],
         "render_fps": 50,
     }
 
-    vision_length = 28
-    vision_angle = 75
-
-    v_range = NumericalRange(0.0, 3.5)
-    w_range = NumericalRange(-28.6, 28.6)
-    nvec = (7, 21)
-
-    obstacle_size_range = (10, 25)
-    sgcnn_size = 16
-
-    render_repeat_times = 2  # 渲染时放缩比例
-
-    render_tv = False
-    render_covered_weed = True
-    render_covered_farmland = True
-
     def __init__(
-            self,
-            action_type: str = 'discrete',
-            render_mode: str = None,
-            state_pixels: bool = False,  # 是否渲染第一视角
-            state_size: tuple[int, int] = (128, 128),
-            state_downsize: tuple[int, int] = (128, 128),
-            num_obstacles_range: tuple[int, int] = (5, 8),
-            use_sgcnn: bool = True,
-            use_global_obs: bool = True,
-            use_apf: bool = True,
-            use_box_boundary: bool = True,  # 在场景外是否绘制障碍物包裹
-            use_traj: bool = True,
-            noise_position: Optional[float] = 0.0,
-            noise_direction: Optional[float] = 0.0,
-            noise_weed: Optional[float] = 0.0,
-            map_dir: str = 'envs/maps/1-400',
+        self,
+        action_type: str = "discrete",
+        render_mode: Optional[str] = None,
+        # 观测管理
+        state_pixels: bool = False,
+        state_size: Tuple[int, int] = (128, 128),
+        state_downsize: Tuple[int, int] = (128, 128),
+        # 随机因素
+        position_noise: float = 0.0,
+        direction_noise: float = 0.0,
+        weed_noise: float = 0.0,
+        # 地图相关
+        map_dir: str = "envs/maps/1-400",
+        use_box_boundary: bool = True,
+        num_obstacles_range: Tuple[int, int] = (5, 8),
+        obstacle_size_range: Tuple[int, int] = (10, 25),
+        # 其余
+        use_multiscale: bool = True,
+        use_global_features: bool = True,
+        global_feature_size: int = 16,
+        render_repeat_times: int = 2,
     ):
         """
-        初始化CppEnvBase环境类的实例。
+        初始化主环境。
 
-        参数:
-        action_type (str): 动作类型，可选值为'discrete'、'continuous'或'multi_discrete'。
-        render_mode (str): 渲染模式，可选值为'rgb_array'或'state_pixels'。
-        state_pixels (bool): 是否渲染第一视角。
-        state_size (tuple[int, int]): 状态图像的尺寸，默认为(128, 128)。
-        state_downsize (tuple[int, int]): 状态图像缩小后的尺寸，默认为(128, 128)。
-        num_obstacles_range (tuple[int, int]): 障碍物数量范围，默认为(5, 8)。
-        use_sgcnn (bool): 是否使用SG-CNN，默认为True。
-        use_global_obs (bool): 是否使用全局观测，默认为True。
-        use_apf (bool): 是否使用人工势场，默认为True。
-        use_box_boundary (bool): 在场景外是否绘制障碍物包裹，默认为True。
-        use_traj (bool): 是否使用轨迹，默认为True。
-        noise_position (Optional[float]): 位置噪声，默认为0.0。
-        noise_direction (Optional[float]): 方向噪声，默认为0.0。
-        noise_weed (Optional[float]): 杂草噪声，默认为0.0。
-        map_dir (str): 地图目录，默认为'envs/maps/1-400'。
+        :param action_type: 动作类型，'discrete', 'continuous', 或 'multi_discrete'。
+        :param render_mode: 渲染模式，'rgb_array' 或 'state_pixels'。
+        :param state_pixels: 是否使用第一人称视角渲染。
+        :param state_size: 观测图像的尺寸 (宽, 高)。
+        :param state_downsize: 缩小后的观测图像尺寸 (宽, 高)。
+        :param position_noise: 位置噪声强度。
+        :param direction_noise: 方向噪声强度。
+        :param weed_noise: 杂草噪声强度。
+        :param map_dir: 地图文件夹路径。
+        :param use_box_boundary: 是否使用边界框作为障碍物。
+        :param num_obstacles_range: 障碍物数量范围。
+        :param obstacle_size_range: 障碍物尺寸范围。
+        :param use_multiscale: 是否使用多尺度特征。
+        :param use_global_features: 是否使用全局特征。
+        :param global_feature_size: 全局特征的尺寸。
+        :param render_repeat_times: 渲染时图像重复倍数。
         """
         super().__init__()
-        # Read maps
-        self.map_dir = Path(__file__).parent.parent / map_dir
-        self.map_names = sorted(os.listdir(self.map_dir))
-        # Environmental parameters
         self.action_type = action_type
-        self.dimensions = cv2.imread(str(self.map_dir / self.map_names[0])).shape[:-1]  # 先列数再行数
-        self.state_size = state_size
-        self.state_downsize = state_downsize
-        self.num_obstacles_range = num_obstacles_range
-        self.use_sgcnn = use_sgcnn
-        self.use_global_obs = use_global_obs
-        self.use_apf = use_apf
-        self.use_box_boundary = use_box_boundary
-        self.use_traj = use_traj
-        self.noise_position = noise_position
-        self.noise_direction = noise_direction
-        self.noise_weed = noise_weed
-        total_channels = 4 + use_traj
-        obs_shape = (total_channels, *self.state_downsize)
-        if use_sgcnn:
-            obs_shape = (total_channels * (4 + use_global_obs), *(ds // 8 for ds in self.state_downsize))
-
-        # RL parameters
-        self.observation_space = gym.spaces.Dict({
-            'observation': gym.spaces.Box(
-                low=0., high=1., shape=obs_shape, dtype=np.float32
-            ),
-            'vector': gym.spaces.Box(
-                low=-1., high=1., dtype=np.float32
-            ),
-            'weed_ratio': gym.spaces.Box(
-                low=0., high=1., dtype=np.float32
-            ),
-        })
-        if self.action_type == 'discrete':
-            self.action_space = gym.spaces.Discrete(n=self.nvec[0] * self.nvec[1])
-        elif self.action_type == 'continuous':
-            self.action_space = gym.spaces.Box(low=np.array([self.v_range.min, self.w_range.min]),
-                                               high=np.array([self.v_range.max, self.w_range.max]),
-                                               shape=(2,),
-                                               dtype=np.float32)
-        elif self.action_type == 'multi_discrete':
-            self.action_space = gym.spaces.MultiDiscrete(nvec=self.nvec)
-        else:
-            raise NotImplementedError(
-                f'Available action spaces are ["discrete", "continuous", "multi_discrete"], got {action_type}'
-            )
-
-        # Agents
-        self.agent = MowerAgent()
-        self.last_state = None
-        self.map_id = None
-        self.map_frontier = None
-        self.map_obstacle = None
-        self.map_weed = None
-        self.map_trajectory = None
-        self.t = None
-        self.weed_num_t = None
-        self.frontier_area_t = None
-        self.frontier_tv_t = None
-        self.steer_t = None
-        # Misc
         self.render_mode = render_mode
         self.state_pixels = state_pixels
-        self.screen = None
-        self.clock = None
-        self.isopen = True
+        self.render_repeat_times = render_repeat_times
 
-    # state对角尺寸
-    @property
-    def state_size_diag(self) -> tuple[int, int]:
-        return (np.ceil(np.sqrt(2) * self.state_size[0]).astype(np.int32),
-                np.ceil(np.sqrt(2) * self.state_size[1]).astype(np.int32))
+        # RNG
+        self.rng = np.random.default_rng()
 
-    # 图片对角尺寸
-    @property
-    def dimensions_diag(self) -> tuple[int, int]:
-        return (np.ceil(np.sqrt(2) * self.dimensions[0]).astype(np.int32),
-                np.ceil(np.sqrt(2) * self.dimensions[1]).astype(np.int32))
+        # 数值区间
+        speed_range = NumericalRange(0.0, 3.5)
+        angular_range = NumericalRange(-28.6, 28.6)
 
-    def set_action_type(self, action_type: str = "discrete"):
-        self.action_type = action_type
+        # 地图管理
+        self.map_manager = MapManager(
+            map_dir=map_dir,
+            num_obstacles_range=num_obstacles_range,
+            obstacle_size_range=obstacle_size_range,
+            use_box_boundary=use_box_boundary,
+            weed_noise=weed_noise,
+            rng=self.rng
+        )
 
-    def set_obstacle_range(self, num_obstacles_range: tuple[int, int] = (5, 8)):
-        self.num_obstacles_range = num_obstacles_range
+        # 观测管理
+        self.obs_manager = ObservationManager(
+            state_size=state_size,
+            state_downsize=state_downsize,
+            vision_length=28,
+            vision_angle=75.0,
+            use_multiscale=use_multiscale,
+            use_global_features=use_global_features,
+            global_feature_size=global_feature_size,
+            position_noise=position_noise,
+            direction_noise=direction_noise,
+            rng=self.rng
+        )
 
-    def get_action(self, action: Union[int, Tuple[int, int], Tuple[float, float]]) -> tuple[float, float]:
+        # 奖励管理
+        self.reward_manager = RewardManager(
+            speed_range=speed_range,
+            angular_range=angular_range
+        )
+
+        # 初始化 action_space 和 observation_space
+        self._initialize_action_space()
+        self._initialize_observation_space()
+
+        # 机器人对象
+        self.agent = MowerAgent()
+
+        # 其他地图或渲染用数据
+        self.trajectory_map: np.ndarray = np.zeros((1, 1), dtype=np.uint8)
+        self.mist_map: np.ndarray = np.zeros((1, 1), dtype=np.uint8)
+
+        # 渲染
+        self.screen: Optional[pygame.Surface] = None
+        self.clock: Optional[pygame.time.Clock] = None
+        self.is_open: bool = True
+
+        # 时间步
+        self.current_step: int = 0
+        # 记录上一步农田/杂草/转向等信息，用于奖励
+        self.previous_weed_count: int = 0
+        self.previous_frontier_area: int = 0
+        self.previous_frontier_tv: float = 0.0
+        self.previous_steer: float = 0.0
+
+    def _initialize_action_space(self):
+        """
+        初始化动作空间。
+        """
         if self.action_type == 'discrete':
-            acc = action // self.nvec[1]  # //之后在0~6范围
-            linear_velocity = (self.v_range.min
-                               + (acc + 1) / (self.nvec[0]) * self.v_range.mode)  # 通过+1将速度最低档设置为0.5,+后面是做线性的放缩
-            steer = action % self.nvec[1]  # %后在0~20范围
-            angular_velocity = (self.w_range.min
-                                + steer / (self.nvec[1] - 1) * self.w_range.mode)  # -1去掉中位数，保证线性放缩合理
+            # 假设动作空间基于障碍物数量范围进行离散化
+            self.action_space = gym.spaces.Discrete(self.map_manager.num_obstacles_range[1] * self.map_manager.num_obstacles_range[1])
         elif self.action_type == 'continuous':
-            linear_velocity, angular_velocity = action
+            self.action_space = gym.spaces.Box(
+                low=np.array([self.reward_manager.speed_range.min, self.reward_manager.angular_range.min], dtype=np.float32),
+                high=np.array([self.reward_manager.speed_range.max, self.reward_manager.angular_range.max], dtype=np.float32),
+                shape=(2,),
+                dtype=np.float32,
+            )
         elif self.action_type == 'multi_discrete':
-            acc = action[0]
-            linear_velocity = (self.v_range.min
-                               + (acc + 1) / (self.nvec[0]) * self.v_range.mode)
-            steer = action[1]
-            angular_velocity = (self.w_range.min
-                                + steer / (self.nvec[1] - 1) * self.w_range.mode)
+            self.action_space = gym.spaces.MultiDiscrete(nvec=self.map_manager.num_obstacles_range)
         else:
-            raise NotImplementedError(
-                f'Available action spaces are ["discrete", "continuous", "multi_discrete"], got "{self.action_type}"'
-            )
-        return linear_velocity, angular_velocity
+            raise NotImplementedError(f"不支持的动作类型: {self.action_type}")
 
-    def step(self, action: Union[int, Tuple[int, int], Tuple[float, float]]):
-        x_t, y_t = self.agent.position_discrete
-        acc, steer = self.get_action(action)
-        self.agent.control(acc, steer)
-        cv2.fillPoly(self.map_weed, [self.agent.convex_hull.round().astype(np.int32)], color=(0.,))
-        cv2.ellipse(img=self.map_frontier,
-                    center=self.agent.position_discrete,
-                    axes=(self.vision_length, self.vision_length),
-                    angle=self.agent.direction,
-                    startAngle=-self.vision_angle / 2,
-                    endAngle=self.vision_angle / 2,
-                    color=(0.,),
-                    thickness=-1,
-                    )
-        cv2.ellipse(img=self.map_mist,
-                    center=self.agent.position_discrete,
-                    axes=(self.vision_length + 1, self.vision_length + 1),
-                    angle=self.agent.direction,
-                    startAngle=-self.vision_angle / 2,
-                    endAngle=self.vision_angle / 2,
-                    color=(1.,),
-                    thickness=-1,
-                    )
-        crashed = self.check_collision()
-        x_tp1, y_tp1 = self.agent.position_discrete
-        x_t = max(min(x_t, self.dimensions[0] - 1), 0)
-        y_t = max(min(y_t, self.dimensions[1] - 1), 0)
-        x_tp1 = max(min(x_tp1, self.dimensions[0] - 1), 0)
-        y_tp1 = max(min(y_tp1, self.dimensions[1] - 1), 0)
-        cv2.line(self.map_trajectory, pt1=(x_t, y_t), pt2=(x_tp1, y_tp1), color=(1.,))
-        reward = self.get_reward(steer, x_t, y_t, x_tp1, y_tp1)
+
+
+    def _initialize_observation_space(self):
+        """
+        初始化观测空间。
+        """
+        if self.obs_manager.use_multiscale:
+            sgcnn_channels = 5 + 4  # 原地图通道 + 多尺度 + 全局特征
+        else:
+            sgcnn_channels = 5  # 原地图通道
+
+        obs_shape = (sgcnn_channels, self.obs_manager.state_downsize[0], self.obs_manager.state_downsize[1])
+        self.observation_space = gym.spaces.Dict({
+            "observation": gym.spaces.Box(low=0., high=1., shape=obs_shape, dtype=np.float32),
+            "vector": gym.spaces.Box(low=-1., high=1., shape=(1,), dtype=np.float32),
+            "weed_ratio": gym.spaces.Box(low=0., high=1., shape=(1,), dtype=np.float32)
+        })
+
+    def step(
+        self,
+        action: Union[int, Tuple[int, int], Tuple[float, float]]
+    ) -> Tuple[Dict[str, Union[np.ndarray, float]], float, bool, bool, Dict[str, Any]]:
+        """
+        执行动作并返回观测、奖励、是否结束、是否超时及额外信息。
+
+        :param action: 执行动作。
+        :return: 观测、奖励、是否结束、是否超时、额外信息。
+        """
+        # 解析动作
+        speed, steer = self._parse_action(action)
+
+
+
+        # 记录当前状态以便奖励计算
+        previous_position = self.agent.position_discrete
+        previous_steer = self.agent.last_steer
+
+        # 执行控制
+        self.agent.control(speed, steer)
+
+        # 割除杂草
+        self._cut_weeds()
+
+        # 更新农田前沿区域
+        self._update_field_frontier()
+
+        # 更新迷雾区域
+        self._update_mist()
+
+        # 检测碰撞
+        crashed = self._check_collision()
+
+        # 绘制轨迹
+        self._update_trajectory(previous_position)
+
+        # 计算奖励
+        reward = self._calculate_reward(steer, previous_steer)
+
+        # 处理碰撞惩罚
         if crashed:
-            reward -= 399.
-        self.t += 1
-        time_out = self.t == 3000
-        # finish = self.weed_num_t == 0 and self.frontier_area_t == 0
-        finish = self.weed_num_t == 0  # TODO: 这样楚瑜就没办法测试了，因此记得解决，看看能不能解决吧
+            reward += self.reward_manager.coefficients['collision_penalty']
+
+        # 增加步数
+        self.current_step += 1
+        time_out = (self.current_step >= 3000)
+
+        # 检查是否完成（所有杂草已割）
+        finish = (self.previous_weed_count <= 0)
         if finish:
-            reward += 500
+            reward += self.reward_manager.coefficients['completion_bonus']
+
         done = crashed or finish
-        obs = self.observation()
-        return obs, reward, done, time_out, {}
 
-    def get_extra_reward(self,
-                         steer_tp1: float,
-                         x_t: int,
-                         y_t: int,
-                         x_tp1: int,
-                         y_tp1: int) -> float:
-        return 0.
+        # 获取观测
+        observation = self._get_observation()
 
-    def get_reward(self,  # 这个y_tp1不是很懂啥意思
-                   steer_tp1: float,
-                   x_t: int,
-                   y_t: int,
-                   x_tp1: int,
-                   y_tp1: int) -> float:
-        weed_num_tp1 = self.map_weed.sum(dtype=np.int32)
-        frontier_area_tp1 = self.map_frontier.sum(dtype=np.int32)
-        frontier_tv_tp1 = total_variation(self.map_frontier.astype(np.int32))
-        # Const
-        reward_const = -0.1
-        # Turning
-        reward_turn_gap = -0.5 * abs(steer_tp1 - self.steer_t) / self.w_range.max
-        reward_turn_direction = -0.30 * (0. if (steer_tp1 * self.steer_t >= 0
-                                                or (steer_tp1 == 0 and self.steer_t == 0))
-                                         else 1.)
-        reward_turn_self = 0.25 * (0.4 - abs(steer_tp1 / self.w_range.max) ** 0.5)
-        reward_turn = 0.0 * (reward_turn_gap
-                             + reward_turn_direction
-                             + reward_turn_self
-                             )
-        # Frontier
-        reward_frontier_coverage = (self.frontier_area_t - frontier_area_tp1) / (
-                2 * MowerAgent.width * self.v_range.max)
-        reward_frontier_tv = 0.5 * (self.frontier_tv_t - frontier_tv_tp1) / self.v_range.max
-        reward_frontier = 0.125 * (reward_frontier_coverage
-                                   + reward_frontier_tv
-                                   )
-        # Weed
-        reward_weed = 20.0 * (self.weed_num_t - weed_num_tp1)
-        reward_extra = self.get_extra_reward(steer_tp1, x_t, y_t, x_tp1, y_tp1)
-        # Summary
-        reward = (reward_const
-                  + reward_frontier
-                  + reward_weed
-                  + reward_extra
-                  + reward_turn
-                  )
-        reward = np.where(
-            np.abs(reward) < 1e-8,
-            0.,
-            reward,
+        return observation, float(reward), done, time_out, {}
+
+    def _parse_action(self, action: Union[int, Tuple[int, int], Tuple[float, float]]) -> Tuple[float, float]:
+        """
+        根据 action_type 解析动作为 (speed, steer)。
+
+        :param action: 执行动作。
+        :return: (速度, 角速度)。
+        """
+        if self.action_type == 'discrete':
+            acc = action // self.map_manager.num_obstacles_range[1]
+            speed = self.reward_manager.speed_range.min + (acc + 1) / self.map_manager.num_obstacles_range[1] * self.reward_manager.speed_range.max
+            steer = action % self.map_manager.num_obstacles_range[1]
+            steer = self.reward_manager.angular_range.min + steer / (self.map_manager.num_obstacles_range[1] - 1) * self.reward_manager.angular_range.max
+        elif self.action_type == 'continuous':
+            speed, steer = action
+        elif self.action_type == 'multi_discrete':
+            acc, steer = action
+            speed = self.reward_manager.speed_range.min + (acc + 1) / self.map_manager.num_obstacles_range[1] * self.reward_manager.speed_range.max
+            steer = self.reward_manager.angular_range.min + steer / (self.map_manager.num_obstacles_range[1] - 1) * self.reward_manager.angular_range.max
+        else:
+            raise NotImplementedError(f"不支持的动作类型: {self.action_type}")
+        return speed, steer
+
+    def _cut_weeds(self):
+        """
+        割除机器人当前所在区域的杂草。
+        """
+        convex_hull = self.agent.convex_hull.round().astype(np.int32)
+        map_cutter = np.zeros_like(self.map_manager.weed_map)
+        cv2.fillPoly(map_cutter, [convex_hull], color=1)
+        weeds_cut = np.sum(np.logical_and(map_cutter, self.map_manager.weed_map))
+        self.map_manager.weed_map = np.where(map_cutter, 0, self.map_manager.weed_map)
+
+    def _update_field_frontier(self):
+        """
+        更新农田前沿区域。
+        """
+        self.map_manager.field_frontier_map = cv2.ellipse(
+            self.map_manager.field_frontier_map,
+            center=self.agent.position_discrete,
+            axes=(self.obs_manager.vision_length, self.obs_manager.vision_length),
+            angle=self.agent.direction,
+            startAngle=-self.obs_manager.vision_angle / 2,
+            endAngle=self.obs_manager.vision_angle / 2,
+            color=0,
+            thickness=-1
         )
-        self.weed_num_t = weed_num_tp1
-        self.frontier_area_t = frontier_area_tp1
-        self.frontier_tv_t = frontier_tv_tp1
-        self.steer_t = steer_tp1
-        return reward
 
-    def check_collision(self) -> tuple[float, bool]:
+    def _update_mist(self):
+        """
+        更新迷雾区域。
+        """
+        self.mist_map = cv2.ellipse(
+            self.mist_map,
+            center=self.agent.position_discrete,
+            axes=(self.obs_manager.vision_length + 1, self.obs_manager.vision_length + 1),
+            angle=self.agent.direction,
+            startAngle=-self.obs_manager.vision_angle / 2,
+            endAngle=self.obs_manager.vision_angle / 2,
+            color=1,
+            thickness=-1
+        )
+
+        # 如果视野内没有任何农田，则自动扩大可见区域
+        if not np.any(np.logical_and(self.map_manager.field_frontier_map, self.mist_map)):
+            distance = cv2.pointPolygonTest(self.map_manager.initial_bounding_box[0], self.agent.position_discrete, True)
+            radius = int(math.ceil(abs(distance) + 5))
+            self.mist_map = cv2.circle(
+                self.mist_map,
+                self.agent.position_discrete,
+                radius=radius,
+                color=1,
+                thickness=-1
+            )
+
+    def _check_collision(self) -> bool:
+        """
+        检测是否超出边界或与障碍物碰撞。
+
+        :return: 是否发生碰撞。
+        """
         convex_hull = self.agent.convex_hull
-        map_agent = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        cv2.fillPoly(map_agent, [self.agent.convex_hull.round().astype(np.int32)], color=(1,))
-        crashed_bounds: bool = (not (
-                (0 < convex_hull[:, 0])
-                & (convex_hull[:, 0] < self.dimensions[0])
-                & (0 < convex_hull[:, 1])
-                & (convex_hull[:, 1] < self.dimensions[1])
-        ).all())
-        crashed_obstacles: bool = np.logical_and(map_agent, self.map_obstacle).any()
-        self.agent.x = float(np.clip(self.agent.x, 0, self.dimensions[0]))
-        self.agent.y = float(np.clip(self.agent.y, 0, self.dimensions[1]))
-        crashed = np.logical_or(crashed_bounds, crashed_obstacles)
-        return crashed
+        dims = self.map_manager.dimensions
 
-    @staticmethod
-    def get_discounted_apf(map_apf: np.ndarray, max_step: int, eps: Optional[float] = None) -> float:
-        gamma = (max_step - 1) / max_step
-        map_apf = gamma ** map_apf
-        if eps is None:
-            eps = gamma ** max_step
-        return np.where(map_apf < eps, 0., map_apf)
+        # 生成机器人地图
+        agent_map = np.zeros((dims[1], dims[0]), dtype=np.uint8)
+        cv2.fillPoly(agent_map, [convex_hull.round().astype(np.int32)], color=1)
 
-    def get_rotated_obs_(self, maps, mask: Sequence[float]):
-        agent_y = self.agent.y
-        agent_x = self.agent.x
-        if self.noise_position:
-            delta_y = np.clip(self.np_random.normal(0, self.noise_position), -self.noise_position, self.noise_position)
-            delta_x = np.clip(self.np_random.normal(0, self.noise_position), -self.noise_position, self.noise_position)
-            agent_y += delta_y
-            agent_x += delta_x
-        agent_direction = self.agent.direction
-        if self.noise_direction:
-            delta_direction = np.clip(self.np_random.normal(0, self.noise_direction),
-                                      -self.noise_direction,
-                                      self.noise_direction)
-            agent_direction += delta_direction
-            agent_direction %= 360
-
-        diag_r = self.state_size[0] / 2 * np.sqrt(2)
-        diag_r_int = np.ceil(diag_r).astype(np.int32)
-        maps = cv2.copyMakeBorder(maps, diag_r_int, diag_r_int, diag_r_int, diag_r_int,
-                                  cv2.BORDER_CONSTANT, value=mask, )
-        leftmost = round(agent_y)
-        rightmost = round(agent_y + 2 * diag_r_int)
-        upmost = round(agent_x)
-        bottommost = round(agent_x + 2 * diag_r_int)
-        obs_cropped = maps[leftmost:rightmost, upmost:bottommost]
-
-        rotation_mat = cv2.getRotationMatrix2D((diag_r, diag_r), 180 + agent_direction, 1.0)
-        dst_size = 2 * diag_r_int
-        delta_leftmost = int(diag_r_int - self.state_size[0] / 2)
-        delta_rightmost = delta_leftmost + self.state_size[0]
-        obs_rotated = cv2.warpAffine(obs_cropped.astype(np.float32), rotation_mat, (dst_size, dst_size))
-        obs_rotated = obs_rotated[delta_leftmost:delta_rightmost, delta_leftmost:delta_rightmost]
-        if obs_rotated.ndim == 2:
-            obs_rotated = obs_rotated.reshape(*obs_rotated.shape, 1)
-        return obs_rotated
-
-    def get_rotated_obs(self, maps: np.ndarray, mask: Sequence[float]) -> np.ndarray:
-        channel_num = maps.shape[-1]
-        ch_beg = 0
-        candidates = []
-        for i in range(0, channel_num, 4):
-            ch_end = min(i + 4, channel_num)
-            candidates.append(self.get_rotated_obs_(maps[:, :, ch_beg:ch_end], mask[ch_beg:ch_end]))
-            ch_beg = ch_end
-        if len(candidates) > 1:
-            candidates = np.concatenate(candidates, axis=-1)
-        else:
-            candidates = candidates[0]
-        return candidates
-
-    def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
-        raise NotImplementedError
-
-    def observation(self) -> dict[str, np.ndarray | float]:
-        maps, mask = self.get_maps_and_mask()
-        obs_rotated = self.get_rotated_obs(maps, mask)
-        obs_rotated_resize = cv2.resize(obs_rotated, self.state_downsize)
-        obs = obs_rotated_resize.transpose(2, 0, 1)
-        if self.use_sgcnn:
-            if self.use_global_obs:
-                obs = self.get_sgcnn_obs(obs, maps, mask)
-            else:
-                obs = self.get_sgcnn_obs(obs, None, None)
-        return {'observation': obs,
-                'vector': self.agent.last_steer / self.w_range.max,
-                'weed_ratio': 1 - self.weed_num_t / self.weed_num}
-
-    def get_global_obs_(self, maps, mask: Sequence[float]):
-        agent_y = self.agent.y
-        agent_x = self.agent.x
-        if self.noise_position:
-            delta_y = np.clip(self.np_random.normal(0, self.noise_position), -self.noise_position, self.noise_position)
-            delta_x = np.clip(self.np_random.normal(0, self.noise_position), -self.noise_position, self.noise_position)
-            agent_y += delta_y
-            agent_x += delta_x
-        agent_direction = self.agent.direction
-        if self.noise_direction:
-            delta_direction = np.clip(self.np_random.normal(0, self.noise_direction),
-                                      -self.noise_direction,
-                                      self.noise_direction)
-            agent_direction += delta_direction
-            agent_direction %= 360
-
-        diag_r = self.dimensions[0] / 2 * np.sqrt(2)
-        diag_r_int = np.ceil(diag_r).astype(np.int32)
-        obs_global = cv2.copyMakeBorder(maps, diag_r_int, diag_r_int, diag_r_int, diag_r_int,
-                                        cv2.BORDER_CONSTANT, value=mask, )
-        leftmost = round(agent_y)
-        rightmost = round(agent_y + 2 * diag_r_int)
-        upmost = round(agent_x)
-        bottommost = round(agent_x + 2 * diag_r_int)
-        obs_cropped = obs_global[leftmost:rightmost, upmost:bottommost]
-
-        rotation_mat = cv2.getRotationMatrix2D((diag_r, diag_r), 180 + agent_direction, 1.0)
-        dst_size = 2 * diag_r_int
-        delta_leftmost = int(diag_r_int - self.dimensions[0] / 2)
-        delta_rightmost = delta_leftmost + self.dimensions[0]
-        obs_global = cv2.warpAffine(obs_cropped.astype(np.float32), rotation_mat, (dst_size, dst_size))
-        obs_global = obs_global[delta_leftmost:delta_rightmost, delta_leftmost:delta_rightmost]
-        if obs_global.ndim == 2:
-            obs_global = obs_global.reshape(*obs_global.shape, 1)
-        obs_global = obs_global.transpose(2, 0, 1)
-        kernel_size = int(np.round(self.dimensions[0] / self.sgcnn_size)) - 1
-        obs_global = F.max_pool2d(torch.from_numpy(obs_global),
-                                  (kernel_size, kernel_size),
-                                  kernel_size).numpy()
-        obs_global = obs_global.transpose(1, 2, 0)
-        return obs_global
-
-    def get_global_obs(self, maps: np.ndarray, mask: Sequence[float]) -> np.ndarray:
-        channel_num = maps.shape[-1]
-        ch_beg = 0
-        candidates = []
-        for i in range(0, channel_num, 4):
-            ch_end = min(i + 4, channel_num)
-            candidates.append(self.get_global_obs_(maps[:, :, ch_beg:ch_end], mask[ch_beg:ch_end]))
-            ch_beg = ch_end
-        if len(candidates) > 1:
-            candidates = np.concatenate(candidates, axis=-1)
-        else:
-            candidates = candidates[0]
-        return candidates
-
-    def get_sgcnn_obs(self, obs: np.ndarray,
-                      maps: Optional[np.ndarray] = None,
-                      mask: Optional[Sequence[float]] = None):  # 在obs的基础上做多尺度图
-        obs_ = obs
-        obs_list = []
-        center_size = self.state_downsize[0] // 2
-        with torch.no_grad():
-            for _ in range(4):
-                obs_list.append(obs_[
-                                :,
-                                (center_size - self.sgcnn_size // 2):(center_size + self.sgcnn_size // 2),
-                                (center_size - self.sgcnn_size // 2):(center_size + self.sgcnn_size // 2),
-                                ])
-                obs_ = F.max_pool2d(torch.from_numpy(obs_), (2, 2), 2).numpy()
-                center_size //= 2
-            if self.use_global_obs:
-                obs_global = self.get_global_obs(maps, mask)
-                obs_global = obs_global.transpose(2, 0, 1)
-                obs_list.append(obs_global)
-        return np.concatenate(obs_list, axis=0, dtype=np.float32)
-
-    def render_map(self) -> np.ndarray:
-        rendered_map = np.ones((self.dimensions[1], self.dimensions[0], 3), dtype=np.float32) * 255
-        rendered_map = np.where(
-            np.expand_dims(self.map_frontier, axis=-1),
-            # np.array((112, 173, 71)),
-            np.array((76, 187, 23)),
-            # np.array((85, 185, 80)),
-            rendered_map,
+        # 边界碰撞
+        out_of_bounds = not (
+            (convex_hull[:, 0] > 0).all() and
+            (convex_hull[:, 0] < dims[0]).all() and
+            (convex_hull[:, 1] > 0).all() and
+            (convex_hull[:, 1] < dims[1]).all()
         )
-        if self.render_covered_farmland:
-            rendered_map = np.where(
-                np.expand_dims(np.logical_and(self.map_frontier_full, np.logical_not(self.map_frontier)), axis=-1),
-                (
-                        0.25 * np.array((112, 173, 7))
-                        + 0.75 * rendered_map
-                ).astype(np.uint8),
-                rendered_map,
-            )
-        if self.render_tv:
-            mask_tv = total_variation_mat(self.map_frontier)
-            rendered_map = np.where(
-                np.expand_dims(mask_tv, axis=-1),
-                np.array((255, 38, 255)),
-                rendered_map,
-            )
-        cv2.ellipse(img=rendered_map,
-                    center=self.agent.position_discrete,
-                    axes=(self.vision_length, self.vision_length),
-                    angle=self.agent.direction,
-                    startAngle=-self.vision_angle / 2,
-                    endAngle=self.vision_angle / 2,
-                    color=(192, 192, 192),
-                    thickness=-1,
-                    )
-        weed_undiscovered = get_map_pasture_larger(np.logical_and(self.map_weed, self.map_frontier))
-        weed_discovered = get_map_pasture_larger(np.logical_and(self.map_weed, np.logical_not(self.map_frontier)))
-        rendered_map = np.where( # 杂草未发现
-            np.expand_dims(weed_undiscovered, axis=-1),
-            # np.array((237, 125, 49)),
-            np.array((0,0,0)),
-            # np.array((255, 255, 0)),
-            rendered_map,
-        )
-        rendered_map = np.where( # 杂草已发现
-            np.expand_dims(weed_discovered, axis=-1),
-            # np.array((237, 125, 49)),
-            np.array((255, 0, 0)),
-            rendered_map,
-        )
-        rendered_map = np.where(
-            np.expand_dims(self.map_obstacle, axis=-1),
-            np.array((30, 75, 130)),
-            rendered_map,
-        )
-        # if self.render_tv:
-        mask_tv = total_variation_mat(self.map_obstacle)
-        rendered_map = np.where(
-            np.expand_dims(mask_tv, axis=-1),
-            np.array((47, 82, 143)),
-            rendered_map,
-        )
-        cv2.fillPoly(rendered_map, [self.agent.convex_hull.round().astype(np.int32)], color=(255., 0., 0.))
-        rendered_map = np.where(
-            np.expand_dims(self.map_trajectory, axis=-1) != 0,
-            # np.array((0, 255, 255)),
-            np.array((255, 38, 255)),
-            rendered_map,
-        )
-        if self.render_covered_weed:
-            weed_covered = get_map_pasture_larger(
-                np.logical_and(self.map_weed_ori, np.logical_not(self.map_weed))
-            )
-            # weed_covered = get_map_pasture_larger(self.map_weed_ori)
-            # weed_covered = get_map_pasture_larger(self.map_weed)
-            rendered_map = np.where(
-                np.expand_dims(weed_covered, axis=-1),
-                (
-                        # 0.3 * np.array((48, 48, 48))
-                        0.9 * np.array((0, 0, 0))
-                        + 0.1 * rendered_map
-                ).astype(np.uint8),
-                # np.array((255, 0, 0)),
-                rendered_map,
-            )
-        # cv2.polylines(rendered_map, self.min_area_rect, True, (0, 255, 0), 1)
-        return rendered_map
 
-    def render_self(self) -> np.ndarray:
-        agent_y = self.agent.y
-        agent_x = self.agent.x
-        if self.noise_position:
-            delta_y = np.clip(self.np_random.normal(0, self.noise_position), -self.noise_position, self.noise_position)
-            delta_x = np.clip(self.np_random.normal(0, self.noise_position), -self.noise_position, self.noise_position)
-            agent_y += delta_y
-            agent_x += delta_x
-        agent_direction = self.agent.direction
-        if self.noise_direction:
-            delta_direction = np.clip(self.np_random.normal(0, self.noise_direction),
-                                      -self.noise_direction,
-                                      self.noise_direction)
-            agent_direction += delta_direction
-            agent_direction %= 360
+        # 障碍物碰撞
+        crashed_obstacles = np.any(np.logical_and(agent_map, self.map_manager.obstacle_map))
 
-        rendered_map = self.render_map()
-        diag_r = self.state_size[0] / 2 * np.sqrt(2)
-        diag_r_int = np.ceil(diag_r).astype(np.int32)
-        obs = cv2.copyMakeBorder(rendered_map, diag_r_int, diag_r_int, diag_r_int, diag_r_int,
-                                 cv2.BORDER_CONSTANT, value=np.array((128., 128., 128.)), )
-        leftmost = round(agent_y)
-        rightmost = round(agent_y + 2 * diag_r_int)
-        upmost = round(agent_x)
-        bottommost = round(agent_x + 2 * diag_r_int)
-        obs_cropped = obs[leftmost:rightmost, upmost:bottommost, :]
+        # 位置修正
+        self.agent.x = float(np.clip(self.agent.x, 0, dims[0]))
+        self.agent.y = float(np.clip(self.agent.y, 0, dims[1]))
 
-        rotation_mat = cv2.getRotationMatrix2D((diag_r, diag_r), 180 + agent_direction, 1.0)
-        dst_size = 2 * diag_r_int
-        delta_leftmost = int(diag_r_int - self.state_size[0] / 2)
-        delta_rightmost = delta_leftmost + self.state_size[0]
-        obs_rotated = cv2.warpAffine(obs_cropped.astype(np.float32), rotation_mat, (dst_size, dst_size))
-        obs_rotated = obs_rotated[
-                      delta_leftmost:delta_rightmost,
-                      delta_leftmost:delta_rightmost,
-                      :]
-        return obs_rotated
+        return out_of_bounds or crashed_obstacles
+
+    def _update_trajectory(self, previous_position: Tuple[int, int]):
+        """
+        更新机器人轨迹。
+
+        :param previous_position: 机器人上一步的位置。
+        """
+        current_position = self.agent.position_discrete
+        x_prev, y_prev = previous_position
+        x_curr, y_curr = current_position
+
+        # 确保坐标在有效范围内
+        x_prev = np.clip(x_prev, 0, self.map_manager.dimensions[0] - 1)
+        y_prev = np.clip(y_prev, 0, self.map_manager.dimensions[1] - 1)
+        x_curr = np.clip(x_curr, 0, self.map_manager.dimensions[0] - 1)
+        y_curr = np.clip(y_curr, 0, self.map_manager.dimensions[1] - 1)
+
+        cv2.line(self.trajectory_map, (x_prev, y_prev), (x_curr, y_curr), color=1, thickness=1)
+
+    def _calculate_reward(self, current_steer: float, previous_steer: float) -> float:
+        """
+        计算本步奖励。
+
+        :param current_steer: 当前转向角速度。
+        :param previous_steer: 上一步转向角速度。
+        :return: 本步奖励。
+        """
+        current_weed_count = self.map_manager.weed_map.sum(dtype=np.int32)
+        current_frontier_area = self.map_manager.field_frontier_map.sum(dtype=np.int32)
+        current_frontier_tv = total_variation_mat(self.map_manager.field_frontier_map).sum()
+
+        step_reward = self.reward_manager.calculate_step_reward(
+            current_steer=current_steer,
+            previous_steer=previous_steer,
+            current_frontier_area=current_frontier_area,
+            previous_frontier_area=self.previous_frontier_area,
+            current_frontier_tv=current_frontier_tv,
+            previous_frontier_tv=self.previous_frontier_tv,
+            current_weeds=current_weed_count,
+            previous_weeds=self.previous_weed_count
+        )
+
+        # 更新奖励相关状态
+        self.previous_weed_count = current_weed_count
+        self.previous_frontier_area = current_frontier_area
+        self.previous_frontier_tv = current_frontier_tv
+        self.previous_steer = current_steer
+
+        return step_reward
+
+    def _get_observation(self) -> Dict[str, Union[np.ndarray, float]]:
+        """
+        生成观测，包括图像观测、向量信息和杂草覆盖率。
+
+        :return: 观测字典。
+        """
+        obs_image = self.obs_manager.generate_observation(
+            agent=self.agent,
+            field_frontier_map=self.map_manager.field_frontier_map,
+            mist_map=self.mist_map,
+            weed_map=self.map_manager.weed_map,
+            obstacle_map=self.map_manager.obstacle_map,
+            trajectory_map=self.trajectory_map
+        )
+
+        # 向量信息：归一化的转向
+        vector_info = self.agent.last_steer / self.reward_manager.angular_range.mode
+
+        # 杂草覆盖率
+        weed_ratio = 1.0 - (self.previous_weed_count / max(1, self.map_manager.total_weed_count))
+
+
+        return {
+            "observation": obs_image,
+            "vector": float(vector_info),
+            "weed_ratio": float(weed_ratio)
+        }
 
     def reset(
-            self,
-            *,
-            seed: Optional[int] = None,
-            options: Optional[dict] = None,
-    ) -> tuple[dict[str, np.ndarray | float], dict[Any, Any]]:
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[dict] = None
+    ) -> Tuple[Dict[str, Union[np.ndarray, float]], Dict[str, Any]]:
+        """
+        重置环境，返回初始观测和额外信息。
+
+        :param seed: 随机种子。
+        :param options: 重置选项。
+        :return: 初始观测和额外信息。
+        """
         super().reset(seed=seed)
-        # Parse Options
-        options = options or {}
-        weed_dist = options.get('weed_dist', 'uniform')
-        weed_num = options.get('weed_num', 100)
-        map_id = options.get('map_id', self.np_random.integers(0, len(self.map_names) - 1))
-        specific_scenario_dir = options.get('specific_scenario_dir', None)
-        initial_position = options.get('initial_position', None)
-        initial_direction = options.get('initial_direction', None)
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
 
-        # Check Parameters' Range
-        assert weed_dist in {'uniform', 'gaussian'}
-        assert 0 <= map_id <= len(self.map_names) - 1
+        opts = options or {}
+        weed_distribution = opts.get("weed_distribution", "uniform")
+        weed_count = opts.get("weed_count", 100)
+        map_id = opts.get("map_id", self.rng.integers(0, len(self.map_manager.map_names)))
+        specific_scenario_dir = opts.get("specific_scenario_dir", None)
+        initial_position = opts.get("initial_position", None)
+        initial_direction = opts.get("initial_direction", None)
 
-        if specific_scenario_dir is not None:
-            self.load_maps_from_directory(specific_scenario_dir)
-            box_init_agent_position, box_init_agent_theta = self.initialize_boudingbox()
+        # 加载或随机生成地图
+        if specific_scenario_dir:
+            self.map_manager.load_maps_from_directory(specific_scenario_dir)
+            initial_pos, initial_dir = self.map_manager.find_initial_bounding_box()
         else:
-            self.generate_frontier_maps(map_id)
-            box_init_agent_position, box_init_agent_theta = self.initialize_boudingbox()
-            self.randomize_obstacles()
-            self.initialize_weeds(weed_dist, weed_num)
+            self.map_manager.load_field_frontier_map(map_id)
+            initial_pos, initial_dir = self.map_manager.find_initial_bounding_box()
+            self.map_manager.initialize_obstacle_map(agent_position=initial_pos)
+            self.map_manager.initialize_weed_distribution(weed_distribution, weed_count)
 
+        # 初始化机器人
         self.agent.reset(
-            position=initial_position if initial_position is not None else box_init_agent_position,
-            direction=initial_direction if initial_direction is not None else box_init_agent_theta,
+            position=initial_position if initial_position else initial_pos,
+            direction=initial_direction if initial_direction else initial_dir
         )
 
-        # Initialize other attributes
-        self.map_trajectory = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        self.map_mist = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
+        # 初始化额外地图
+        dims = self.map_manager.dimensions
+        self.trajectory_map = np.zeros((dims[1], dims[0]), dtype=np.uint8)
+        self.mist_map = np.zeros((dims[1], dims[0]), dtype=np.uint8)
 
-        # Update map_frontier and map_mist based on agent's initial position
-        self.update_maps_after_reset()
+        # 更新农田前沿和迷雾区域
+        self._update_maps_after_reset()
 
-        # Get observation
-        self.weed_num_t = self.map_weed.sum(dtype=np.int32)
-        self.frontier_area_t = self.map_frontier.sum(dtype=np.int32)
-        self.frontier_tv_t = total_variation(self.map_frontier.astype(np.int32))
-        self.t = 1
-        self.steer_t = 0.
+        # 初始化奖励相关状态
+        self.previous_weed_count = self.map_manager.weed_map.sum(dtype=np.int32)
+        self.previous_frontier_area = self.map_manager.field_frontier_map.sum(dtype=np.int32)
+        self.previous_frontier_tv = total_variation_mat(self.map_manager.field_frontier_map).sum()
+        self.current_step = 1
+        self.previous_steer = 0.0
 
-        obs = self.observation()
-        return obs, {}
+        # 获取初始观测
+        observation = self._get_observation()
 
-    # def load_maps_from_directory(self, directory: Union[str, Path]):
-    #     directory = Path(directory)
-    #     self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
-    #     self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
-    #     self.map_weed = (cv2.imread(str(directory / 'map_weed.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
-    #     self.map_weed[self.map_frontier == 0] = 0 # 只有map_frontier存在的地方weed才可能存在
-    #     self.dimensions = self.map_frontier.shape[::-1]  # width, height
-    #     self.map_frontier_full = self.map_frontier.copy()
-    #     self.weed_num = self.map_weed.sum()
-    #
-    #     self.initialize_map_weed_noisy()
-    #     self.initialize_map_weed_ori()
+        return observation, {}
 
-    def load_maps_from_directory(self, directory: Union[str, Path]):
-        directory = Path(directory)
-        self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
-        self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
-        self.map_weed = (cv2.imread(str(directory / 'map_weed.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+    def _update_maps_after_reset(self):
+        """
+        根据机器人初始位置更新农田前沿和迷雾。
+        """
+        # 割除初始位置的杂草
+        self._cut_weeds()
 
-        # 确保杂草只存在于农田区域
-        self.map_weed[self.map_frontier == 0] = 0
+        # 更新农田前沿区域
+        self._update_field_frontier()
 
-        # 对障碍物掩码进行轻微膨胀，防止杂草靠近障碍物
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (29, 29))  # 可以根据需要调整内核大小
-        dilated_obstacle = cv2.dilate(self.map_obstacle, kernel, iterations=1)
+        # 更新迷雾区域
+        self._update_mist()
 
-        # 将膨胀后的障碍物区域中的杂草设置为零
-        self.map_weed[dilated_obstacle > 0] = 0
+    def render(self) -> Optional[np.ndarray]:
+        """
+        渲染环境，返回 RGB 图像数组。
 
-        self.dimensions = self.map_frontier.shape[::-1]  # width, height
-        self.map_frontier_full = self.map_frontier.copy()
-        self.weed_num = self.map_weed.sum()
-
-        self.initialize_map_weed_noisy()
-        self.initialize_map_weed_ori()
-
-    def generate_frontier_maps(self, map_id: int):
-        # Read self.map_frontier from map_dir / map_names[map_id]
-        self.map_id = map_id
-        self.map_frontier: np.ndarray = (
-            cv2.imread(str(self.map_dir / self.map_names[self.map_id])).sum(axis=-1) > 0).astype(np.uint8)
-        self.dimensions = self.map_frontier.shape[::-1]  # width, height
-        self.map_frontier_full = self.map_frontier.copy()
-
-    def initialize_boudingbox(self):
-        # Use self.map_frontier to find contours and set agent's initial position and orientation
-        contours, _ = cv2.findContours(self.map_frontier, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=lambda a: cv2.contourArea(a), reverse=True)
-        rect = cv2.minAreaRect(contours[0])
-        box = cv2.boxPoints(rect)
-        start_idx = box.sum(axis=1).argmin()
-        box = np.roll(box, 4 - start_idx, 0)
-        # (4, 1, 2)
-        box = box.reshape((-1, 1, 2)).astype(np.int32)
-        pos_index = 0 if math.hypot(*(box[1, 0] - box[0, 0])) > math.hypot(*(box[2, 0] - box[1, 0])) else 1
-        box_init_agent_position = (float(box[pos_index, 0, 0]), float(box[pos_index, 0, 1]))
-        theta_vector = box[pos_index + 1, 0] - box[pos_index, 0]
-        theta_vector = theta_vector / math.hypot(*theta_vector)
-        box_init_agent_theta = math.degrees(math.atan2(theta_vector[1], theta_vector[0]))
-        self.min_area_rect = [box]
-        self.contours = contours
-        return box_init_agent_position, box_init_agent_theta
-
-    def randomize_obstacles(self):
-        # Initialize self.map_obstacle
-        if self.use_box_boundary:
-            # Existing code to draw box boundary
-            self.map_obstacle = np.ones((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-            box = self.min_area_rect[0]
-            r_center = 0.5 * (box[0, 0] + box[2, 0])
-            vecs = [box[0, 0] - box[1, 0], box[1, 0] - box[2, 0]]
-            wd_i = 0
-            if abs(vecs[1][1]) < abs(vecs[1][0]):
-                wd_i = 0
-            ht_i = (wd_i + 1) % 2
-            angle = math.atan2(vecs[wd_i][1], vecs[wd_i][0]) * 180.0 / math.pi
-            width = math.hypot(*vecs[wd_i])
-            height = math.hypot(*vecs[ht_i])
-            width = max(width * 1.2, width + 60)  # 障碍物空间放大了1.2倍
-            height = max(height * 1.2, height + 60)
-            rect_expanded = ((r_center[0], r_center[1]), (width, height), angle)
-            box = cv2.boxPoints(rect_expanded)
-            start_idx = box.sum(axis=1).argmin()
-            box = np.roll(box, 4 - start_idx, 0)
-            # (4, 1, 2)
-            box = box.reshape((-1, 1, 2)).astype(np.int32)
-            cv2.fillPoly(self.map_obstacle, [box], color=(0,))
-        else:
-            self.map_obstacle = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-
-        num_obstacles = self.np_random.integers(*self.num_obstacles_range) if self.num_obstacles_range[1] > 0 else 0
-        current_obstacle_num = 0
-        while current_obstacle_num < num_obstacles:
-            # Existing code to generate random obstacles
-            o_x = self.np_random.uniform(0 + 100, self.dimensions[0] - 100)
-            o_y = self.np_random.uniform(0 + 100, self.dimensions[1] - 100)
-            if self.map_obstacle[int(o_y), int(o_x)]:
-                continue
-            o_len = self.np_random.uniform(*self.obstacle_size_range)
-            o_wid = self.np_random.uniform(*self.obstacle_size_range)
-            angle = self.np_random.uniform(0., 360.)
-            pts = np.array(
-                cv2.RotatedRect(center=(o_x, o_y), size=(o_len, o_wid), angle=angle).points(), dtype=np.int32
-            ).reshape((-1, 1, 2))
-            dist2player = cv2.pointPolygonTest(pts, self.agent.position, True)
-            if dist2player < -2.0 * MowerAgent.length:
-                current_obstacle_num += 1
-                cv2.fillPoly(self.map_obstacle, [pts], color=(1.,))
-                pts_expanded = np.array(
-                    cv2.RotatedRect(center=(o_x, o_y), size=(o_len + 15, o_wid + 15), angle=angle).points(),
-                    dtype=np.int32
-                ).reshape((-1, 1, 2))
-                cv2.fillPoly(self.map_frontier, [pts_expanded], color=(0.,))
-
-    def initialize_weeds(self, weed_dist: str, weed_num: int):
-        self.map_weed = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
-        if isinstance(weed_num, float):
-            weed_num = math.ceil(self.map_frontier.sum() * weed_num)
-        self.weed_num = weed_num
-        weed_count = 0
-        while weed_count < weed_num:
-            if weed_dist == 'uniform':
-                weed_x = self.np_random.integers(low=0, high=self.dimensions[0] - 1)
-                weed_y = self.np_random.integers(low=0, high=self.dimensions[1] - 1)
-                if self.map_frontier[weed_y, weed_x] and not self.map_weed[weed_y, weed_x]:
-                    self.map_weed[weed_y, weed_x] = 1
-                    weed_count += 1
-            else:
-                weed_x = self.np_random.normal(loc=0., scale=0.35, size=weed_num - weed_count)
-                weed_y = self.np_random.normal(loc=0., scale=0.35, size=weed_num - weed_count)
-                weed_x = np.round((self.dimensions[1] / 2) * weed_x + self.dimensions[1] / 2).astype(np.int32)
-                weed_x = np.clip(weed_x, 0, self.dimensions[0] - 1, dtype=np.int32)
-                weed_y = np.round((self.dimensions[1] / 2) * weed_y + self.dimensions[1] / 2).astype(np.int32)
-                weed_y = np.clip(weed_y, 0, self.dimensions[1] - 1, dtype=np.int32)
-                for i in range(weed_num - weed_count):
-                    if self.map_frontier[weed_y[i], weed_x[i]] and not self.map_weed[weed_y[i], weed_x[i]]:
-                        self.map_weed[weed_y[i], weed_x[i]] = 1
-                        weed_count += 1
-        self.initialize_map_weed_noisy()
-        self.initialize_map_weed_ori()
-
-    def initialize_map_weed_ori(self):
-        if self.render_covered_weed:
-            self.map_weed_ori = self.map_weed.copy()
-
-    def initialize_map_weed_noisy(self):
-        if self.noise_weed:
-            print("!!!!!!!!!!!!!!!")
-            self.map_weed_noisy = np.zeros_like(self.map_weed)
-            # Apply noise to self.map_weed to generate self.map_weed_noisy
-            weed_positions = np.argwhere(self.map_weed)
-            for weed_y, weed_x in weed_positions:
-                delta_x = self.np_random.integers(low=-1, high=1)
-                delta_y = self.np_random.integers(low=-1, high=1)
-                new_x = np.clip(weed_x + delta_x, 0, self.dimensions[0] - 1)
-                new_y = np.clip(weed_y + delta_y, 0, self.dimensions[1] - 1)
-                self.map_weed_noisy[new_y, new_x] = 1
-
-    def update_maps_after_reset(self):
-        # Update map_frontier and map_mist based on agent's initial position
-        cv2.fillPoly(self.map_weed, [self.agent.convex_hull.round().astype(np.int32)], color=(0.,))
-        cv2.ellipse(img=self.map_frontier,
-                    center=self.agent.position_discrete,
-                    axes=(self.vision_length, self.vision_length),
-                    angle=self.agent.direction,
-                    startAngle=-self.vision_angle / 2,
-                    endAngle=self.vision_angle / 2,
-                    color=(0.,),
-                    thickness=-1, )
-        cv2.ellipse(img=self.map_mist,
-                    center=self.agent.position_discrete,
-                    axes=(self.vision_length + 1, self.vision_length + 1),
-                    angle=self.agent.direction,
-                    startAngle=-self.vision_angle / 2,
-                    endAngle=self.vision_angle / 2,
-                    color=(1.,),
-                    thickness=-1, )
-        if not np.logical_and(self.map_frontier, self.map_mist).any(): #视野中没有农田，则扩开
-            dist2player = cv2.pointPolygonTest(self.contours[0], self.agent.position, True)
-            cv2.circle(img=self.map_mist,
-                       center=self.agent.position_discrete,
-                       radius=math.ceil(abs(dist2player) + 5),
-                       color=(1.,),
-                       thickness=-1, )
-
-    def render(self):
-        if self.render_mode is None:
-            assert self.spec is not None
+        :return: 渲染后的图像数组，或 None 如果未指定渲染模式。
+        """
+        if self.render_mode not in self.metadata["render_modes"]:
             gym.logger.warn(
                 "You are calling render method without specifying any render mode. "
                 "You can specify the render_mode at initialization, "
                 f'e.g. gym.make("{self.spec.id}", render_mode="rgb_array")'
             )
-            return
+            return None
 
         try:
             import pygame
-            from pygame import gfxdraw
         except ImportError as e:
-            raise DependencyNotInstalled(
-                "pygame is not installed, run `pip install gymnasium[classic-control]`"
+            raise gym.error.DependencyNotInstalled(
+                "pygame 未安装，请运行 `pip install pygame`。"
             ) from e
+
         if self.screen is None:
             pygame.init()
             if self.state_pixels:
-                self.screen = pygame.Surface(
-                    (self.state_size[0] * self.render_repeat_times,
-                     self.state_size[1] * self.render_repeat_times)
-                )
+                width = self.obs_manager.state_size[0] * self.render_repeat_times
+                height = self.obs_manager.state_size[1] * self.render_repeat_times
+                self.screen = pygame.Surface((width, height))
             else:
-                self.screen = pygame.Surface(
-                    (self.dimensions[0] * self.render_repeat_times,
-                     self.dimensions[1] * self.render_repeat_times)
-                )
+                map_width, map_height = self.map_manager.dimensions
+                self.screen = pygame.Surface((map_width * self.render_repeat_times, map_height * self.render_repeat_times))
+
         if self.clock is None:
             self.clock = pygame.time.Clock()
 
         if self.state_pixels:
-            img = self.render_self()
+            img = self._render_first_person_view()
         else:
-            img = self.render_map()
-        # 尝试用cv2和scipy.ndimage插值替换repeat，但是运行速度降低较多，或者插值后图像模糊有锯齿，故保留repeat操作
-        img = img.repeat(self.render_repeat_times, axis=0).repeat(self.render_repeat_times, axis=1)  # 按比例缩放render的img
+            img = self._render_full_map()
+
+        # 按比例缩放图像
+        img = img.repeat(self.render_repeat_times, axis=0).repeat(self.render_repeat_times, axis=1)
+
+        # 转换为 Pygame Surface 并绘制
         surf = pygame.surfarray.make_surface(img)
         self.screen.blit(surf, (0, 0))
-        return np.transpose(
-            np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
-        )  # pygame数据 (width, height, channels) -> numpy数据 (height, width, channels)
+
+        # 返回图像数组
+        rendered_image = np.transpose(np.array(pygame.surfarray.pixels3d(self.screen)), (1, 0, 2))
+
+
+        return rendered_image
+
+    def _render_full_map(self) -> np.ndarray:
+        """
+        渲染完整地图，返回 RGB 图像数组。
+
+        :return: 渲染后的完整地图图像。
+        """
+        map_width, map_height = self.map_manager.dimensions
+        rendered_map = np.ones((map_height, map_width, 3), dtype=np.uint8) * 255  # 白色背景
+
+        # 农田前沿
+        frontier_map = (self.map_manager.field_frontier_map > 0)
+        rendered_map[frontier_map] = [76, 187, 23]  # 绿色
+
+        # 障碍物
+        obstacle_map = (self.map_manager.obstacle_map > 0)
+        rendered_map[obstacle_map] = [30, 75, 130]  # 蓝色
+
+        # 杂草
+        weed_map = (self.map_manager.weed_map > 0)
+        rendered_map[weed_map] = [255, 0, 0]  # 红色
+
+        # 轨迹
+        trajectory_map = (self.trajectory_map > 0)
+        rendered_map[trajectory_map] = [255, 38, 255]  # 紫色
+
+        # 绘制机器人
+        convex_hull = self.agent.convex_hull.round().astype(np.int32)
+        cv2.fillPoly(rendered_map, [convex_hull], color=(0, 0, 255))  # 蓝色表示机器人
+
+        # 添加障碍物边缘高亮
+        obstacle_edges = total_variation_mat(self.map_manager.obstacle_map)
+        rendered_map[obstacle_edges] = [47, 82, 143]  # 深蓝色
+
+
+        return rendered_map
+
+    def _render_first_person_view(self) -> np.ndarray:
+        """
+        渲染第一人称视角的图像，返回 RGB 图像数组。
+
+        :return: 渲染后的第一人称视角图像。
+        """
+        # 获取旋转裁剪后的观测图像
+        obs_dict = self._get_observation()
+        img_tensor = obs_dict["observation"]  # (C, H, W)
+
+        # 转换为 (H, W, C)
+        img = img_tensor.transpose(1, 2, 0)
+
+        # 确保图像有 3 个通道
+        if img.shape[2] < 3:
+            img = np.repeat(img, 3, axis=2)
+        elif img.shape[2] > 3:
+            img = img[:, :, :3]
+
+        # 转换为 uint8
+        img_uint8 = np.clip(img * 255, 0, 255).astype(np.uint8)
+
+
+        return img_uint8
 
     def close(self):
+        """
+        关闭环境，释放资源。
+        """
         if self.screen is not None:
             import pygame
-
             pygame.display.quit()
             pygame.quit()
-            self.isopen = False
+            self.is_open = False

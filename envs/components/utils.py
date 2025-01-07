@@ -64,12 +64,14 @@ def get_map_pasture_larger(map_pasture: np.ndarray):
 
 
 class NumericalRange:
-    def __init__(self, min_, max_):
-        self.min = min_
-        self.max = max_
-
+    """
+    用于表示一个有上下限并具有“mode”(即可由上下限计算出的有效范围)的数值区间。
+    """
+    def __init__(self, min: float, max: float):
+        self.min = min
+        self.max = max
     @property
-    def mode(self):
+    def mode(self) -> float:
         return self.max - self.min
 
 class MowerAgent:
@@ -80,13 +82,14 @@ class MowerAgent:
     lw_ratio = math.degrees(math.atan2(width / occupancy, length / occupancy))
 
     def __init__(
-            self,
-            position: tuple[float, float] = (None, None),
-            direction: float = None,
+        self,
+        position: tuple[float, float] = (0.0, 0.0),
+        direction: float = 0.0,
     ):
         self.x, self.y = position
-        self.direction = direction
-        self.last_acc, self.last_steer = 0., 0.
+        self.direction = direction % 360.0  # 确保方向在 0-360 度之间
+        self.last_speed: float = 0.0
+        self.last_steer: float = 0.0
 
     @property
     def position(self):
@@ -113,7 +116,7 @@ class MowerAgent:
         """
         根据线速度和角速度以及动力学模型，计算新的x,y
         """
-        self.last_acc, self.last_steer = acc, steer
+        self.last_speed, self.last_steer = acc, steer
         self.direction = (self.direction + steer) % 360
         dx = acc * math.cos(math.radians(self.direction))
         dy = acc * math.sin(math.radians(self.direction))
@@ -122,8 +125,9 @@ class MowerAgent:
 
     def reset(self, position: tuple[float, float], direction: float):
         self.x, self.y = position
-        self.last_acc, self.last_steer = 0., 0.
         self.direction = direction
+        self.last_speed, self.last_steer = 0.0, 0.0
+
 
 class RealAgent(MowerAgent):
     def control(self, new_position: tuple[float, float], new_direction: float):

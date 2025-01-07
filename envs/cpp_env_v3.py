@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import cv2
 import numpy as np
 from cpu_apf import cpu_apf_bool  # noqa
 from gymnasium.wrappers import HumanRendering
 
-from envs.cpp_env_base import CppEnvBase
-from envs.utils import get_map_pasture_larger
+from envs.cpp_env_base_copy import CppEnvBase
 
 
 class CppEnv(CppEnvBase):

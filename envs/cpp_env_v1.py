@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from gymnasium.wrappers import HumanRendering
 
-from envs.cpp_env_base import CppEnvBase
+from envs.cpp_env_base_copy import CppEnvBase
 
 
 class CppEnv(CppEnvBase):
@@ -14,8 +14,8 @@ class CppEnv(CppEnvBase):
     def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
         maps = np.stack((
             self.map_frontier,
-            self.map_obstacle,
-            np.logical_and(self.map_weed, np.logical_not(self.map_frontier)),
+            self.map_obstacle, # TODO: 障碍物按障碍物填充，现在的mask有问题，整得很复杂但是就是边界填充的问题，想办法化简一下
+            np.logical_and(self.map_weed, np.logical_not(self.map_frontier)), # 可观测的杂草
             self.map_trajectory,
         ), axis=-1)
         mask = [0., 0., 1., 0.]

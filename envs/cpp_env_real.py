@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional
-
-import cv2
 import numpy as np
 import gymnasium as gym
 
 from envs.cpp_env_v2 import CppEnv
-from envs.utils import RealAgent
+from envs.components.utils import RealAgent
 from gymnasium.wrappers import HumanRendering
 
 class CppEnvReal(CppEnv):

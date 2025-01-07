@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from typing import Optional
-import os
-import cv2
 import numpy as np
 from cpu_apf import cpu_apf_bool  # noqa
 from gymnasium.wrappers import HumanRendering
 
 from envs.cpp_env_base import CppEnvBase
-from envs.utils import get_map_pasture_larger, total_variation_mat
+from envs.components.utils import total_variation_mat
 
 
 class CppEnv(CppEnvBase):
