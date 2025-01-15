@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-
+from typing import Dict, Any, Tuple, Optional
 
 def total_variation(images: np.ndarray) -> int:
     """https://github.com/tensorflow/tensorflow/blob/v2.7.0/tensorflow/python/ops/image_ops_impl.py#L3213-L3282"""
@@ -23,45 +23,28 @@ def total_variation_mat(images: np.ndarray) -> np.ndarray:
 
 
 def get_map_pasture_larger(map_pasture: np.ndarray):
-    map_pasture_larger = map_pasture
-    map_pasture_larger = np.logical_or(
-        map_pasture_larger,
-        np.insert(
-            map_pasture[1:, :],
-            -1,
-            False,
-            axis=0
+    map_pasture_larger = map_pasture.copy()
+    shifts = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    for shift in shifts:
+        map_pasture_larger = np.logical_or(
+            map_pasture_larger,
+            np.roll(map_pasture, shift, axis=(0, 1))
         )
-    )
-    map_pasture_larger = np.logical_or(
-        map_pasture_larger,
-        np.insert(
-            map_pasture[:-1, :],
-            0,
-            False,
-            axis=0
-        )
-    )
-    map_pasture_larger = np.logical_or(
-        map_pasture_larger,
-        np.insert(
-            map_pasture[:, 1:],
-            -1,
-            False,
-            axis=1
-        )
-    )
-    map_pasture_larger = np.logical_or(
-        map_pasture_larger,
-        np.insert(
-            map_pasture[:, :-1],
-            0,
-            False,
-            axis=1
-        )
-    )
     return map_pasture_larger
 
+def apply_mask_with_color(base_map: np.ndarray, mask: np.ndarray, color: Tuple[int, int, int],alpha: float = 1.0) -> np.ndarray:
+    """
+    将掩码为True的区域上色到 color。支持alpha混合：
+      - alpha=1.0 时，直接替换为 color
+      - alpha<1.0 时，采用 alpha*color + (1-alpha)*base_map 进行混合
+    """
+    mask_3d = np.expand_dims(mask, axis=-1)  # (H, W, 1)
+    if alpha >= 1.0:
+        return np.where(mask_3d, color, base_map)
+    else:
+        color_arr = np.array(color, dtype=np.float32)
+        blended_region = ((1 - alpha) * base_map.astype(np.float32) + alpha * color_arr).astype(np.uint8)
+        return np.where(mask_3d, blended_region, base_map).astype(np.uint8)
 
 class NumericalRange:
     """
@@ -81,12 +64,15 @@ class MowerAgent:
     occupancy = math.hypot(width, length)
     lw_ratio = math.degrees(math.atan2(width / occupancy, length / occupancy))
 
+    vision_length = 28.0
+    vision_angle  = 75.0
+
     def __init__(
         self,
         position: tuple[float, float] = (0.0, 0.0),
         direction: float = 0.0,
     ):
-        self.x, self.y = position
+        self.x, self.y = position #
         self.direction = direction % 360.0  # 确保方向在 0-360 度之间
         self.last_speed: float = 0.0
         self.last_steer: float = 0.0
@@ -112,20 +98,20 @@ class MowerAgent:
              self.y + 1.0 * self.width * math.sin(math.radians(self.direction + 0 - self.lw_ratio))),
         ])
 
-    def control(self, acc: float, steer: float):
+    def control(self, speed: float, steer: float):
         """
         根据线速度和角速度以及动力学模型，计算新的x,y
         """
-        self.last_speed, self.last_steer = acc, steer
+        self.last_speed, self.last_steer = speed, steer
         self.direction = (self.direction + steer) % 360
-        dx = acc * math.cos(math.radians(self.direction))
-        dy = acc * math.sin(math.radians(self.direction))
+        dx = speed * math.cos(math.radians(self.direction))
+        dy = speed * math.sin(math.radians(self.direction))
         self.x += dx
         self.y += dy
 
     def reset(self, position: tuple[float, float], direction: float):
         self.x, self.y = position
-        self.direction = direction
+        self.direction = direction % 360.0
         self.last_speed, self.last_steer = 0.0, 0.0
 
 

@@ -3,281 +3,236 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence, Tuple, Optional
-
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+from typing import Sequence, Tuple, Optional, Dict, Any
 
 from envs.components.utils import MowerAgent
 
 
+# TODO: 未来可以优化多尺度的可扩展性，使得变得很好用
 class ObservationManager:
-    """
-    负责根据机器人位置与方向，对地图进行裁剪、旋转，生成观测。
-    """
-
     def __init__(
-        self,
-        state_size: Tuple[int, int] = (128, 128),
-        state_downsize: Tuple[int, int] = (128, 128),
-        vision_length: int = 28,
-        vision_angle: float = 75.0,
-        use_multiscale: bool = True,
-        use_global_features: bool = True,
-        global_feature_size: int = 16,
-        position_noise: float = 0.0,
-        direction_noise: float = 0.0,
-        rng: Optional[np.random.Generator] = None
+            self,
+            state_size: Tuple[int, int] = (128, 128), state_downsize: Tuple[int, int] = (128, 128),
+            use_multiscale: bool = True, n_scales: int = 4, multiscale_feature_size: int = 16,
+            use_global_features: bool = True,
+            position_noise: float = 0.0, direction_noise: float = 0.0,
+            rng: Optional[np.random.Generator] = None,
     ):
         """
-        初始化观测管理器。
+        2D BEV Observation 提取器
 
-        :param state_size: 观测图像的尺寸 (宽, 高)。
-        :param state_downsize: 缩小后的观测图像尺寸 (宽, 高)。
-        :param vision_length: 机器人的视野长度。
-        :param vision_angle: 机器人的视野角度。
-        :param use_multiscale: 是否使用多尺度特征。
-        :param use_global_features: 是否使用全局特征。
-        :param global_feature_size: 全局特征的尺寸。
-        :param position_noise: 位置噪声强度。
-        :param direction_noise: 方向噪声强度。
-        :param rng: 随机数生成器。
+        参数:
+            state_size (Tuple[int, int]): 状态尺寸，默认为 (128, 128)。
+            state_downsize (Tuple[int, int]): 状态下采样尺寸，默认为 (128, 128)。
+            use_multiscale (bool): 是否使用多尺度特征，默认为 True。
+            n_scales (int): 多尺度特征的尺度数量，默认为 4。
+            multiscale_feature_size (int): 全局特征尺寸，默认为 16。
+            use_global_features (bool): 是否使用全局特征，默认为 True。
+            position_noise (float): 位置噪声，默认为 0.0。
+            direction_noise (float): 方向噪声，默认为 0.0。
+            rng (Optional[np.random.Generator]): 随机数生成器，默认为 None。
         """
         self.state_size = state_size
         self.state_downsize = state_downsize
-        self.vision_length = vision_length
-        self.vision_angle = vision_angle
         self.use_multiscale = use_multiscale
+        self.n_scales = n_scales
         self.use_global_features = use_global_features
-        self.global_feature_size = global_feature_size
-
+        self.multiscale_feature_size = multiscale_feature_size
         self.position_noise = position_noise
         self.direction_noise = direction_noise
-        self.rng = rng if rng else np.random.default_rng()
+        self.rng = rng
 
-    def generate_observation( # TODO: 以后扩展任意地图的concat一起，提高可扩展性
-        self,
-        agent: MowerAgent,
-        field_frontier_map: np.ndarray,
-        mist_map: np.ndarray,
-        weed_map: np.ndarray,
-        obstacle_map: np.ndarray,
-        trajectory_map: np.ndarray
+    def generate_observation(
+            self,
+            agent: MowerAgent,
+            maps_dict: Dict[str, Dict[str, Any]]
+            # eg. {"map1": {"map": map1, "pad": 0}, "map2": {"map": map2, "pad": 0}}
     ) -> np.ndarray:
         """
-        生成观测，包括局部视野和（可选）全局特征。
-
-        :param agent: 机器人对象。
-        :param field_frontier_map: 农田前沿地图。
-        :param mist_map: 迷雾地图。
-        :param weed_map: 当前杂草地图。
-        :param obstacle_map: 障碍物地图。
-        :param trajectory_map: 轨迹地图。
-        :return: 生成的观测图像。
-        """
-        # 将各地图层叠加为多通道图像
-        # TODO: 这里现在逻辑需要修改，要暴露接口给不同环境使用，或者变成一个对外参数
-        maps = np.stack(
-            [
-                field_frontier_map,
-                mist_map,
-                weed_map,
-                obstacle_map,
-                trajectory_map
-            ],
-            axis=-1
+         主入口：根据 agent 位姿和 maps_dict 生成观测图 (C,H,W)。
+         逻辑概括：
+           1) 将maps_dict堆叠 => (H,W,C)
+           2) 对位姿注入噪声后 => 裁剪 & 旋转 => 得到 (state_size)
+           3) 再resize到 state_downsize
+           4) 如果 use_multiscale => multi-scale pooling; 如果 use_global_features => 提取全局特征 => concat
+           5) 返回 float32 (C,H,W)
+         """
+        stacked_maps, pad_values = self.stack_maps(maps_dict)  # 堆叠地图: (H,W,C) & 其padding
+        noisy_y, noisy_x, noisy_direction = self._get_noisy_pose(agent)  # 位姿注入噪声
+        local_observation = self.extract_ego_observation(
+            maps=stacked_maps, pad_values=pad_values,
+            center_y=noisy_y, center_x=noisy_x, direction_deg=noisy_direction,
+            patch_size=self.state_size
         )
-
-        # 定义填充值（假设背景为0）
-        pad_value = [0] * maps.shape[-1]
-
-        # 提取局部观测
-        local_observation = self._extract_local_observation(maps, pad_value, agent)
-
-        # 缩放到 state_downsize
-        resized_observation = cv2.resize(local_observation, self.state_downsize, interpolation=cv2.INTER_NEAREST)
-
-        # 转置为 (C, H, W) 格式
-        obs = resized_observation.transpose(2, 0, 1)
+        local_observation_downsampled = cv2.resize(
+            local_observation,
+            (self.state_downsize[1], self.state_downsize[0]),
+            interpolation=cv2.INTER_NEAREST
+        )
+        local_patch_downsampled = local_observation_downsampled.transpose(2, 0, 1)
 
         if self.use_multiscale:
-            # 生成多尺度特征
-            obs = self._generate_multiscale_features(obs, maps, pad_value, agent)
+            local_features = self._generate_multiscale_features(local_patch_downsampled)
+        else:
+            local_features = local_patch_downsampled
 
-        return obs.astype(np.float32)
+        if self.use_global_features:  # TODO，这里现在可能有尺度不匹配的风险，要注意 确实有，这个地方要好好注意一下
+            global_features = self._extract_global_patch(
+                maps=stacked_maps, pad_values=pad_values,
+                center_y=noisy_y, center_x=noisy_x, direction_deg=noisy_direction
+            )
+            final_observation = np.concatenate([local_features, global_features], axis=0)
+        else:
+            final_observation = local_features
 
-    def _extract_local_observation( # TDOO: 没看到对observation和vector的记录，等待后续envbase找一找
-        self,
-        maps: np.ndarray,
-        pad_value: Sequence[float],
-        agent: MowerAgent
+        return final_observation.astype(np.float32)
+
+    @staticmethod
+    def stack_maps(maps_dict: Dict[str, Dict[str, Any]]) -> Tuple[np.ndarray, Sequence[float]]:
+        first_key = next(iter(maps_dict))
+        base_shape = maps_dict[first_key]["map"].shape
+
+        channels = []
+        pad_values = []
+
+        for map_name, map_info in maps_dict.items():
+            map_array = map_info["map"]
+            pad_value = map_info.get("pad", 0)
+            if map_array.shape != base_shape:
+                raise ValueError(
+                    f"地图 {map_name} 大小 {map_array.shape} 与其它地图不一致: {base_shape}。"
+                )
+            channels.append(map_array)
+            pad_values.append(pad_value)
+
+        stacked_maps = np.stack(channels, axis=-1)
+        return stacked_maps, pad_values
+
+    def _get_noisy_pose(self, agent: MowerAgent) -> Tuple[float, float, float]:
+        y, x, direction = agent.y, agent.x, agent.direction
+        if self.position_noise > 0:
+            y_noise = self.rng.normal(0, self.position_noise)
+            x_noise = self.rng.normal(0, self.position_noise)
+            y += np.clip(y_noise, -self.position_noise, self.position_noise)
+            x += np.clip(x_noise, -self.position_noise, self.position_noise)
+        if self.direction_noise > 0:
+            direction_noise = self.rng.normal(0, self.direction_noise)
+            direction = (direction + np.clip(direction_noise, -self.direction_noise, self.direction_noise)) % 360
+        return y, x, direction
+
+    @staticmethod
+    def _apply_padding_per_channel(image: np.ndarray, pad_values: Sequence[float], pad_lenth: int) -> np.ndarray:
+        height, width, channels = image.shape
+        padded_channels = []
+        for channel_index in range(channels):
+            channel = image[..., channel_index]
+            pad_value = pad_values[channel_index]
+            padded_channel = np.pad(channel, pad_width=((pad_lenth, pad_lenth), (pad_lenth, pad_lenth)),
+                                    mode='constant', constant_values=pad_value)
+            padded_channels.append(padded_channel)
+        return np.stack(padded_channels, axis=-1)
+
+    def extract_ego_observation(
+            self, maps: np.ndarray, pad_values: Sequence[float],
+            center_y: float, center_x: float, direction_deg: float, patch_size: Tuple[int, int]
     ) -> np.ndarray:
         """
-        根据机器人位置和方向，从 maps 中裁剪出局部视野并旋转对正。
-
-        :param maps: 多通道地图数据。
-        :param pad_value: 边界填充的值。
-        :param agent: 机器人对象。
-        :return: 裁剪并旋转后的局部观测图像。
+        提取以输入位姿为中心，输出朝向朝上的局部图像crop patch。
         """
-        agent_y, agent_x = agent.y, agent.x
-        agent_direction = agent.direction
+        patch_height, patch_width = patch_size
 
-        # 添加位置噪声
-        if self.position_noise > 0.0:
-            delta_y = self.rng.normal(0, self.position_noise)
-            delta_x = self.rng.normal(0, self.position_noise)
-            agent_y += np.clip(delta_y, -self.position_noise, self.position_noise)
-            agent_x += np.clip(delta_x, -self.position_noise, self.position_noise)
+        diagonal_length = math.ceil(max(patch_height, patch_width) / 2 * math.sqrt(2))
+        padded_maps = self._apply_padding_per_channel(maps, pad_values, pad_lenth=diagonal_length)
 
-        # 添加方向噪声
-        if self.direction_noise > 0.0:
-            delta_dir = self.rng.normal(0, self.direction_noise)
-            agent_direction = (agent_direction + np.clip(delta_dir, -self.direction_noise, self.direction_noise)) % 360
+        # corp出足够大的ego为中心的patch
+        center_y_padded, center_x_padded = center_y + diagonal_length, center_x + diagonal_length
+        top, bottom = int(round(center_y_padded - diagonal_length)), int(round(center_y_padded + diagonal_length))
+        left, right = int(round(center_x_padded - diagonal_length)), int(round(center_x_padded + diagonal_length))
+        cropped_maps = padded_maps[top:bottom, left:right, :]
+        assert cropped_maps.size != 0
 
-        diag_r = self.state_size[0] / 2 * np.sqrt(2)
-        diag_r_int = np.ceil(diag_r).astype(np.int32)
+        # 旋转patch，使得agent方向朝上
+        rotation_angle = 180 + direction_deg
+        rotation_center = (diagonal_length, diagonal_length)
+        rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
 
-        # 使用 cv2.copyMakeBorder 函数在 maps 图像的边界周围添加边框
-        # 边框的宽度由 diag_r_int 决定，填充值由 pad_value 指定
-        padded_maps = cv2.copyMakeBorder(
-            maps,
-            diag_r_int, diag_r_int, diag_r_int, diag_r_int,
-            cv2.BORDER_CONSTANT,
-            value=pad_value
-        )
-
-        # 计算裁剪坐标
-        left = int(round(agent_y))
-        right = left + 2 * diag_r_int
-        up = int(round(agent_x))
-        down = up + 2 * diag_r_int
-
-        # 裁剪地图
-        cropped_maps = padded_maps[left:right, up:down]
-
-        # 旋转裁剪后的地图以对齐机器人的方向
-        rotation_matrix = cv2.getRotationMatrix2D((diag_r, diag_r), 180 + agent_direction, 1.0)
         rotated_maps = cv2.warpAffine(
-            cropped_maps.astype(np.float32),
+            cropped_maps,
             rotation_matrix,
-            (2 * diag_r_int, 2 * diag_r_int),
-            flags=cv2.INTER_NEAREST
+            (cropped_maps.shape[1], cropped_maps.shape[0])
         )
+        if rotated_maps.ndim == 2:
+            rotated_maps = rotated_maps[..., np.newaxis]
 
-        # 截取为 state_size 大小
-        delta_l = diag_r_int - self.state_size[0] // 2
-        delta_r = delta_l + self.state_size[0]
-        final_observation = rotated_maps[delta_l:delta_r, delta_l:delta_r]
+        # crop出最终目标尺寸patch
+        rotated_map_height, rotated_map_width, _ = rotated_maps.shape
+        start_y = max(0, (rotated_map_height - patch_height) // 2)
+        start_x = max(0, (rotated_map_width - patch_width) // 2)
 
-        # 确保观测图像有通道维度
-        if final_observation.ndim == 2:
-            final_observation = final_observation[..., np.newaxis]
+        final_patch = rotated_maps[start_y:start_y + patch_height, start_x:start_x + patch_width, :]
 
-        return final_observation
+        return final_patch
 
-    def _generate_multiscale_features( # TODO: 这个函数还没有完全弄清楚，等待再学习
-        self,
-        local_obs: np.ndarray,
-        maps: np.ndarray,
-        pad_value: Sequence[float],
-        agent: MowerAgent
+    # 和gpt详细讨论后，认可目前的实现
+    def _generate_multiscale_features(self, observation: np.ndarray) -> np.ndarray:
+        """
+        将observation根据multiscale_feature_size进行多尺度特征提取。
+        """
+        channels, height, width = observation.shape
+
+        observation_tensor = torch.from_numpy(observation).unsqueeze(0)  # (1, channels, height, width)
+        scale_features = []
+
+        for scale_index in range(self.n_scales):
+            crop_length = (2 ** scale_index) * self.multiscale_feature_size
+            crop_length = min(crop_length, height, width)
+
+            # Center crop
+            top, left = (height - crop_length) // 2, (width - crop_length) // 2
+            bottom, right = top + crop_length, left + crop_length
+            cropped = observation_tensor[:, :, top:bottom, left:right]
+
+            # Max pooling to get multiscale size feature
+            kernel_size = max(1, crop_length // self.multiscale_feature_size)
+            pooled = F.max_pool2d(cropped, kernel_size=kernel_size, stride=kernel_size)
+
+            scale_features.append(pooled)
+
+        multiscale_features = torch.cat(scale_features, dim=1).squeeze(0)
+        return multiscale_features.numpy()
+
+
+    def _extract_global_patch(  # 现在的global feature没考虑非多尺度情况下的计算问题
+            self, maps: np.ndarray, pad_values: Sequence[float],
+            center_y: float, center_x: float, direction_deg: float
     ) -> np.ndarray:
         """
-        生成多尺度特征和全局特征。
-
-        :param local_obs: 局部观测图像。
-        :param maps: 多通道地图数据。
-        :param pad_value: 边界填充的值。
-        :param agent: 机器人对象。
-        :return: 包含多尺度特征和全局特征的观测图像。
+        提取全局特征, 且尺寸为map的尺寸，再resize到multiscale_feature_size。
         """
-        feature_list = [local_obs]
-        temp = torch.from_numpy(local_obs).float()
+        multiscale_feature_size = self.multiscale_feature_size
+        height, width, channels = maps.shape
+        global_crop_size = max(height, width)
 
-        # 多尺度池化
-        for _ in range(4):
-            temp = F.max_pool2d(temp, kernel_size=2, stride=2)
-            feature_list.append(temp.numpy())
-
-        if self.use_global_features:
-            global_feature = self._extract_global_observation(maps, pad_value, agent)
-            feature_list.append(global_feature)
-
-        # 按通道维度连接
-        return np.concatenate(feature_list, axis=0)
-
-    def _extract_global_observation(
-        self,
-        maps: np.ndarray,
-        pad_value: Sequence[float],
-        agent: MowerAgent
-    ) -> np.ndarray:
-        """
-        生成全局特征，旋转对正后下采样到指定尺寸。
-
-        :param maps: 多通道地图数据。
-        :param pad_value: 边界填充的值。
-        :param agent: 机器人对象。
-        :return: 全局特征图像。
-        """
-        diag_r = self.state_size[0] / 2 * math.sqrt(2)
-        diag_r_int = int(math.ceil(diag_r))
-
-        agent_y, agent_x = agent.y, agent.x
-        agent_direction = agent.direction
-
-        # 添加位置噪声
-        if self.position_noise > 0.0:
-            delta_y = self.rng.normal(0, self.position_noise)
-            delta_x = self.rng.normal(0, self.position_noise)
-            agent_y += np.clip(delta_y, -self.position_noise, self.position_noise)
-            agent_x += np.clip(delta_x, -self.position_noise, self.position_noise)
-
-        # 添加方向噪声
-        if self.direction_noise > 0.0:
-            delta_dir = self.rng.normal(0, self.direction_noise)
-            agent_direction = (agent_direction + np.clip(delta_dir, -self.direction_noise, self.direction_noise)) % 360
-
-        # 边界填充
-        padded_maps = cv2.copyMakeBorder(
-            maps,
-            diag_r_int, diag_r_int, diag_r_int, diag_r_int,
-            cv2.BORDER_CONSTANT,
-            value=pad_value
+        large_patch = self.extract_ego_observation(
+            maps=maps, pad_values=pad_values,
+            center_y=center_y, center_x=center_x, direction_deg=direction_deg,
+            patch_size=(global_crop_size, global_crop_size)
         )
-
-        # 计算裁剪坐标
-        left = int(round(agent_y))
-        right = left + 2 * diag_r_int
-        up = int(round(agent_x))
-        down = up + 2 * diag_r_int
-
-        # 裁剪地图
-        cropped_maps = padded_maps[left:right, up:down]
-
-        # 旋转裁剪后的地图以对齐机器人的方向
-        rotation_matrix = cv2.getRotationMatrix2D((diag_r, diag_r), 180 + agent_direction, 1.0)
-        rotated_maps = cv2.warpAffine(
-            cropped_maps.astype(np.float32),
-            rotation_matrix,
-            (2 * diag_r_int, 2 * diag_r_int),
-            flags=cv2.INTER_NEAREST
-        )
-
-        # 截取为原大小
-        delta_l = diag_r_int - maps.shape[1] // 2
-        delta_r = delta_l + maps.shape[1]
-        final_global_obs = rotated_maps[delta_l:delta_r, delta_l:delta_r]
-
-        # 确保观测图像有通道维度
-        if final_global_obs.ndim == 2:
-            final_global_obs = final_global_obs[..., np.newaxis]
-
-        # 下采样到 global_feature_size
-        resized_global_obs = cv2.resize(final_global_obs, (self.global_feature_size, self.global_feature_size), interpolation=cv2.INTER_NEAREST)
-        resized_global_obs = resized_global_obs.transpose(2, 0, 1)  # (C, H, W)
-
-        return resized_global_obs
+        # Max pooling to get multiscale size feature
+        large_patch_tensor = large_patch.transpose(2, 0, 1)[np.newaxis, ...]
+        kernel_size = max(1, global_crop_size // multiscale_feature_size)
+        pooled = F.max_pool2d(torch.from_numpy(large_patch_tensor), kernel_size=(kernel_size, kernel_size), stride=kernel_size)
+        pooled_array = pooled.squeeze(0).numpy()
+        # Crop the center multiscale_feature_size x multiscale_feature_size
+        _, pooled_height, pooled_width = pooled_array.shape
+        if pooled_height < self.multiscale_feature_size or pooled_width < self.multiscale_feature_size:
+            raise ValueError(f"全局特征 {pooled_array.shape} 小于 {self.multiscale_feature_size}")
+        start_y = max(0, (pooled_height - multiscale_feature_size) // 2)
+        start_x = max(0, (pooled_width - multiscale_feature_size) // 2)
+        final_global_features = pooled_array[:, start_y:start_y + multiscale_feature_size,
+                                start_x:start_x + multiscale_feature_size]
+        return final_global_features

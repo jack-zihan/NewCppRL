@@ -5,7 +5,7 @@ import numpy as np
 from cpu_apf import cpu_apf_bool  # noqa
 from gymnasium.wrappers import HumanRendering
 
-from envs.cpp_env_base import CppEnvBase
+from envs.cpp_env_base_copy import CppEnvBase
 from envs.components.utils import total_variation_mat
 
 
@@ -42,6 +42,7 @@ class CppEnv(CppEnvBase):
             map_apf = map_apf[1:-1, 1:-1]
         return map_apf
 
+    # TODO：现在的迷雾逻辑有问题，因为把迷雾的0-1做了调整了，另外这个也可以作为一个静态方法放在map_manager.py中去，看看能不能对observation做完全的屏蔽
     def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
         if self.noise_weed and self.np_random.uniform() < self.noise_weed:
             map_weed_ = self.map_weed_noisy
@@ -94,7 +95,7 @@ class CppEnv(CppEnvBase):
                                 )
         return reward_apf
 
-    def render_map(self) -> np.ndarray:
+    def render_map(self) -> np.ndarray: # TODO:render_mist可以成为一个共有功能
         rendered_map = super(CppEnv, self).render_map()
         if self.render_mist:
             rendered_map = np.where(

@@ -1,525 +1,261 @@
-# main_env.py
-
 from __future__ import annotations
 
+import cv2
+import numpy as np
+import gymnasium as gym
+
+from gymnasium.wrappers import HumanRendering
 from typing import Optional, Tuple, Union, Dict, Any
 
-import cv2
-import gymnasium as gym
-import numpy as np
-import math
-import pygame
-from pygame import gfxdraw
+try:
+    import pygame
+    from pygame import gfxdraw
+except ImportError:
+    pygame = None
 
-import logging
-
-from envs.components.utils import MowerAgent, NumericalRange, total_variation_mat
 from envs.components.map_manager import MapManager
 from envs.components.reward_manager import RewardManager
 from envs.components.observation_manager import ObservationManager
+from envs.components.dynamic import SceneDynamic
+from envs.components.utils import MowerAgent, NumericalRange, total_variation_mat, get_map_pasture_larger, \
+    apply_mask_with_color
 
 
 class CppEnvBase(gym.Env):
     """
-    主环境类，管理环境交互、渲染和状态更新。
+    主环境类，管理环境交互、渲染和状态更新，使用新的 MapManager / RewardManager / ObservationManager。
     """
     metadata = {
         "render_modes": ["rgb_array", "state_pixels"],
         "render_fps": 50,
     }
 
-    def __init__(
-        self,
-        action_type: str = "discrete",
-        render_mode: Optional[str] = None,
-        # 观测管理
-        state_pixels: bool = False,
-        state_size: Tuple[int, int] = (128, 128),
-        state_downsize: Tuple[int, int] = (128, 128),
-        # 随机因素
-        position_noise: float = 0.0,
-        direction_noise: float = 0.0,
-        weed_noise: float = 0.0,
-        # 地图相关
-        map_dir: str = "envs/maps/1-400",
-        use_box_boundary: bool = True,
-        num_obstacles_range: Tuple[int, int] = (5, 8),
-        obstacle_size_range: Tuple[int, int] = (10, 25),
-        # 其余
-        use_multiscale: bool = True,
-        use_global_features: bool = True,
-        global_feature_size: int = 16,
-        render_repeat_times: int = 2,
-    ):
-        """
-        初始化主环境。
+    # 对速度与角速度的离散化: nvec=(7,21)
+    v_range = NumericalRange(0.0, 3.5)
+    w_range = NumericalRange(-28.6, 28.6)
+    nvec = (7, 21)
 
-        :param action_type: 动作类型，'discrete', 'continuous', 或 'multi_discrete'。
-        :param render_mode: 渲染模式，'rgb_array' 或 'state_pixels'。
-        :param state_pixels: 是否使用第一人称视角渲染。
-        :param state_size: 观测图像的尺寸 (宽, 高)。
-        :param state_downsize: 缩小后的观测图像尺寸 (宽, 高)。
-        :param position_noise: 位置噪声强度。
-        :param direction_noise: 方向噪声强度。
-        :param weed_noise: 杂草噪声强度。
-        :param map_dir: 地图文件夹路径。
-        :param use_box_boundary: 是否使用边界框作为障碍物。
-        :param num_obstacles_range: 障碍物数量范围。
-        :param obstacle_size_range: 障碍物尺寸范围。
-        :param use_multiscale: 是否使用多尺度特征。
-        :param use_global_features: 是否使用全局特征。
-        :param global_feature_size: 全局特征的尺寸。
-        :param render_repeat_times: 渲染时图像重复倍数。
-        """
+    # 其它用于渲染的静态属性
+    render_repeat_times = 2
+    render_tv = False
+    render_mist = False
+    render_covered_weed = True
+    render_covered_farmland = True
+
+    def __init__(
+            self,
+            action_type: str = "discrete",
+            render_mode: Optional[str] = None,
+            state_pixels: bool = False,  # 是否渲染第一视角
+            state_size: Tuple[int, int] = (128, 128), state_downsize: Tuple[int, int] = (128, 128),
+            max_episode_steps: int = 3000,
+            # 地图/障碍物/杂草参数
+            map_dir: str = "envs/maps/1-400", use_box_boundary: bool = True,
+            num_obstacles_range: Tuple[int, int] = (5, 8), obstacle_size_range: Tuple[int, int] = (10, 25),
+
+            # Observation Manager
+            use_traj: bool = True,
+            use_mist: bool = True,
+            use_global_features: bool = True,
+            use_multiscale: bool = True, multiscale_feature_size: int = 16, n_scales: int = 4,
+
+            position_noise: float = 0.0, direction_noise: float = 0.0, weed_noise: float = 0.0,
+
+    ):
         super().__init__()
+
         self.action_type = action_type
         self.render_mode = render_mode
         self.state_pixels = state_pixels
-        self.render_repeat_times = render_repeat_times
+        self.state_size = state_size
+        self.state_downsize = state_downsize
+        self.max_episode_steps = max_episode_steps
 
-        # RNG
-        self.rng = np.random.default_rng()
+        self.current_step: int = 0
 
-        # 数值区间
-        speed_range = NumericalRange(0.0, 3.5)
-        angular_range = NumericalRange(-28.6, 28.6)
+        self.maps_dict: Dict[str, np.ndarray] = {}
+        self.pad_values: Dict[str, float] = {}
+        self.state_info: Dict[str, Any] = {}
 
-        # 地图管理
+        # 用于渲染
+        self.screen = None
+        self.clock = None
+        self.is_open = True
+
         self.map_manager = MapManager(
             map_dir=map_dir,
             num_obstacles_range=num_obstacles_range,
             obstacle_size_range=obstacle_size_range,
             use_box_boundary=use_box_boundary,
             weed_noise=weed_noise,
-            rng=self.rng
+            use_traj=use_traj,
+            use_mist=use_mist,
         )
 
-        # 观测管理
-        self.obs_manager = ObservationManager(
+        self.reward_manager = RewardManager(
+            speed_range=self.v_range,
+            angular_range=self.w_range
+        )
+
+        self.observation_manager = ObservationManager(
             state_size=state_size,
             state_downsize=state_downsize,
-            vision_length=28,
-            vision_angle=75.0,
             use_multiscale=use_multiscale,
+            multiscale_feature_size=multiscale_feature_size,
             use_global_features=use_global_features,
-            global_feature_size=global_feature_size,
             position_noise=position_noise,
             direction_noise=direction_noise,
-            rng=self.rng
+            n_scales=n_scales
         )
 
-        # 奖励管理
-        self.reward_manager = RewardManager(
-            speed_range=speed_range,
-            angular_range=angular_range
-        )
+        self.scene_dynamic = SceneDynamic()
+        self.agent: MowerAgent = MowerAgent()
 
-        # 初始化 action_space 和 observation_space
-        self._initialize_action_space()
-        self._initialize_observation_space()
-
-        # 机器人对象
-        self.agent = MowerAgent()
-
-        # 其他地图或渲染用数据
-        self.trajectory_map: np.ndarray = np.zeros((1, 1), dtype=np.uint8)
-        self.mist_map: np.ndarray = np.zeros((1, 1), dtype=np.uint8)
-
-        # 渲染
-        self.screen: Optional[pygame.Surface] = None
-        self.clock: Optional[pygame.time.Clock] = None
-        self.is_open: bool = True
-
-        # 时间步
-        self.current_step: int = 0
-        # 记录上一步农田/杂草/转向等信息，用于奖励
-        self.previous_weed_count: int = 0
-        self.previous_frontier_area: int = 0
-        self.previous_frontier_tv: float = 0.0
-        self.previous_steer: float = 0.0
-
-    def _initialize_action_space(self):
-        """
-        初始化动作空间。
-        """
         if self.action_type == 'discrete':
-            # 假设动作空间基于障碍物数量范围进行离散化
-            self.action_space = gym.spaces.Discrete(self.map_manager.num_obstacles_range[1] * self.map_manager.num_obstacles_range[1])
+            self.action_space = gym.spaces.Discrete(self.nvec[0] * self.nvec[1])  # 7*21=147
+        elif self.action_type == 'multi_discrete':
+            self.action_space = gym.spaces.MultiDiscrete(self.nvec)
         elif self.action_type == 'continuous':
             self.action_space = gym.spaces.Box(
-                low=np.array([self.reward_manager.speed_range.min, self.reward_manager.angular_range.min], dtype=np.float32),
-                high=np.array([self.reward_manager.speed_range.max, self.reward_manager.angular_range.max], dtype=np.float32),
+                low=np.array([self.v_range.min, self.w_range.min], dtype=np.float32),
+                high=np.array([self.v_range.max, self.w_range.max], dtype=np.float32),
                 shape=(2,),
-                dtype=np.float32,
+                dtype=np.float32
             )
-        elif self.action_type == 'multi_discrete':
-            self.action_space = gym.spaces.MultiDiscrete(nvec=self.map_manager.num_obstacles_range)
         else:
-            raise NotImplementedError(f"不支持的动作类型: {self.action_type}")
-
-
-
-    def _initialize_observation_space(self):
-        """
-        初始化观测空间。
-        """
-        if self.obs_manager.use_multiscale:
-            sgcnn_channels = 5 + 4  # 原地图通道 + 多尺度 + 全局特征
-        else:
-            sgcnn_channels = 5  # 原地图通道
-
-        obs_shape = (sgcnn_channels, self.obs_manager.state_downsize[0], self.obs_manager.state_downsize[1])
+            raise NotImplementedError(
+                f"不支持动作类型: {action_type}, 仅支持['discrete','continuous','multi_discrete']")
+        map_shape = (multiscale_feature_size, multiscale_feature_size) if use_multiscale else state_downsize
+        obs_shape = (self.map_manager.get_map_channel() * (1 + use_global_features + n_scales if use_multiscale else 0),
+                     *map_shape)
         self.observation_space = gym.spaces.Dict({
             "observation": gym.spaces.Box(low=0., high=1., shape=obs_shape, dtype=np.float32),
             "vector": gym.spaces.Box(low=-1., high=1., shape=(1,), dtype=np.float32),
             "weed_ratio": gym.spaces.Box(low=0., high=1., shape=(1,), dtype=np.float32)
         })
 
-    def step(
-        self,
-        action: Union[int, Tuple[int, int], Tuple[float, float]]
-    ) -> Tuple[Dict[str, Union[np.ndarray, float]], float, bool, bool, Dict[str, Any]]:
-        """
-        执行动作并返回观测、奖励、是否结束、是否超时及额外信息。
+    # -----------------------------
+    # reset
+    # -----------------------------
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) \
+            -> Tuple[Dict[str, Union[np.ndarray, float]], Dict[str, Any]]:
+        super().reset(seed=seed)
 
-        :param action: 执行动作。
-        :return: 观测、奖励、是否结束、是否超时、额外信息。
-        """
-        # 解析动作
-        speed, steer = self._parse_action(action)
+        self.map_manager.rng = self.np_random
+        self.observation_manager.rng = self.np_random
 
+        opts = options or {}
+        weed_dist = opts.get("weed_distribution", "uniform")
+        weed_count = opts.get("weed_count", 100)
+        map_id = opts.get("map_id", None)
+        specific_scenario_dir = opts.get("specific_scenario_dir", None)
+        initial_position, initial_direction = opts.get("initial_position", None), opts.get("initial_direction", None)
 
+        # 加载或随机生成地图
+        self.maps_dict, agent_dict, self.pad_info, self.state_info = self.map_manager.generate_scenario(
+            map_id=map_id,
+            weed_dist=weed_dist,
+            weed_count=weed_count,
+            specific_scenario_dir=specific_scenario_dir,
+        )
 
-        # 记录当前状态以便奖励计算
-        previous_position = self.agent.position_discrete
-        previous_steer = self.agent.last_steer
+        self.agent = agent_dict["agent_1"]
+        if initial_position and initial_direction:
+            self.agent.reset(position=initial_position, direction=initial_direction)
 
-        # 执行控制
-        self.agent.control(speed, steer)
+        self.scene_dynamic.reset(self.maps_dict, self.agent, self.state_info)
+        self.current_step = 0
 
-        # 割除杂草
-        self._cut_weeds()
-
-        # 更新农田前沿区域
-        self._update_field_frontier()
-
-        # 更新迷雾区域
-        self._update_mist()
-
-        # 检测碰撞
-        crashed = self._check_collision()
-
-        # 绘制轨迹
-        self._update_trajectory(previous_position)
-
-        # 计算奖励
-        reward = self._calculate_reward(steer, previous_steer)
-
-        # 处理碰撞惩罚
-        if crashed:
-            reward += self.reward_manager.coefficients['collision_penalty']
-
-        # 增加步数
-        self.current_step += 1
-        time_out = (self.current_step >= 3000)
-
-        # 检查是否完成（所有杂草已割）
-        finish = (self.previous_weed_count <= 0)
-        if finish:
-            reward += self.reward_manager.coefficients['completion_bonus']
-
-        done = crashed or finish
-
-        # 获取观测
         observation = self._get_observation()
+        return observation, {}
 
-        return observation, float(reward), done, time_out, {}
+    def step(self, action: Union[int, Tuple[int, int], Tuple[float, float]]) \
+            -> Tuple[Dict[str, Union[np.ndarray, float]], float, bool, bool, Dict[str, Any]]:
+        linear_vel, angular_vel = self._parse_action(action)
+        self.maps_dict, self.agent, self.state_info = self.scene_dynamic.dynamic(maps_dict=self.maps_dict,
+                                                                                 agent=self.agent,
+                                                                                 state_info=self.state_info,
+                                                                                 linear_velocity=linear_vel,
+                                                                                 angular_velocity=angular_vel)
+
+        reward = self.reward_manager.calculate_step_reward(state_info=self.state_info)
+        crashed, finished = self.state_info["crashed"], self.state_info["finished"]
+        time_out = (self.current_step >= self.max_episode_steps)
+        done = crashed or finished or time_out
+        obs = self._get_observation()
+
+        self.current_step += 1
+        return obs, float(reward), done, time_out, {}
 
     def _parse_action(self, action: Union[int, Tuple[int, int], Tuple[float, float]]) -> Tuple[float, float]:
         """
-        根据 action_type 解析动作为 (speed, steer)。
-
-        :param action: 执行动作。
-        :return: (速度, 角速度)。
+        使用 nvec=(7,21)，v_range=(0,3.5), w_range=(-28.6,28.6)
         """
         if self.action_type == 'discrete':
-            acc = action // self.map_manager.num_obstacles_range[1]
-            speed = self.reward_manager.speed_range.min + (acc + 1) / self.map_manager.num_obstacles_range[1] * self.reward_manager.speed_range.max
-            steer = action % self.map_manager.num_obstacles_range[1]
-            steer = self.reward_manager.angular_range.min + steer / (self.map_manager.num_obstacles_range[1] - 1) * self.reward_manager.angular_range.max
-        elif self.action_type == 'continuous':
-            speed, steer = action
+            acc = action // self.nvec[1]  # [0..6]
+            steer_idx = action % self.nvec[1]  # [0..20]
+            linear_vel = (self.v_range.min + (acc + 1) / self.nvec[0] * self.v_range.mode)  # 7档
+            angular_vel = (self.w_range.min + steer_idx / (self.nvec[1] - 1) * self.w_range.mode)
         elif self.action_type == 'multi_discrete':
-            acc, steer = action
-            speed = self.reward_manager.speed_range.min + (acc + 1) / self.map_manager.num_obstacles_range[1] * self.reward_manager.speed_range.max
-            steer = self.reward_manager.angular_range.min + steer / (self.map_manager.num_obstacles_range[1] - 1) * self.reward_manager.angular_range.max
+            acc, steer_idx = action
+            linear_vel = (self.v_range.min + (acc + 1) / self.nvec[0] * self.v_range.mode)
+            angular_vel = (self.w_range.min + steer_idx / (self.nvec[1] - 1) * self.w_range.mode)
+        elif self.action_type == 'continuous':
+            linear_vel, angular_vel = action
         else:
-            raise NotImplementedError(f"不支持的动作类型: {self.action_type}")
-        return speed, steer
+            raise NotImplementedError(f"不支持动作类型: {self.action_type}")
 
-    def _cut_weeds(self):
-        """
-        割除机器人当前所在区域的杂草。
-        """
-        convex_hull = self.agent.convex_hull.round().astype(np.int32)
-        map_cutter = np.zeros_like(self.map_manager.weed_map)
-        cv2.fillPoly(map_cutter, [convex_hull], color=1)
-        weeds_cut = np.sum(np.logical_and(map_cutter, self.map_manager.weed_map))
-        self.map_manager.weed_map = np.where(map_cutter, 0, self.map_manager.weed_map)
+        return float(linear_vel), float(angular_vel)
 
-    def _update_field_frontier(self):
-        """
-        更新农田前沿区域。
-        """
-        self.map_manager.field_frontier_map = cv2.ellipse(
-            self.map_manager.field_frontier_map,
-            center=self.agent.position_discrete,
-            axes=(self.obs_manager.vision_length, self.obs_manager.vision_length),
-            angle=self.agent.direction,
-            startAngle=-self.obs_manager.vision_angle / 2,
-            endAngle=self.obs_manager.vision_angle / 2,
-            color=0,
-            thickness=-1
-        )
-
-    def _update_mist(self):
-        """
-        更新迷雾区域。
-        """
-        self.mist_map = cv2.ellipse(
-            self.mist_map,
-            center=self.agent.position_discrete,
-            axes=(self.obs_manager.vision_length + 1, self.obs_manager.vision_length + 1),
-            angle=self.agent.direction,
-            startAngle=-self.obs_manager.vision_angle / 2,
-            endAngle=self.obs_manager.vision_angle / 2,
-            color=1,
-            thickness=-1
-        )
-
-        # 如果视野内没有任何农田，则自动扩大可见区域
-        if not np.any(np.logical_and(self.map_manager.field_frontier_map, self.mist_map)):
-            distance = cv2.pointPolygonTest(self.map_manager.initial_bounding_box[0], self.agent.position_discrete, True)
-            radius = int(math.ceil(abs(distance) + 5))
-            self.mist_map = cv2.circle(
-                self.mist_map,
-                self.agent.position_discrete,
-                radius=radius,
-                color=1,
-                thickness=-1
-            )
-
-    def _check_collision(self) -> bool:
-        """
-        检测是否超出边界或与障碍物碰撞。
-
-        :return: 是否发生碰撞。
-        """
-        convex_hull = self.agent.convex_hull
-        dims = self.map_manager.dimensions
-
-        # 生成机器人地图
-        agent_map = np.zeros((dims[1], dims[0]), dtype=np.uint8)
-        cv2.fillPoly(agent_map, [convex_hull.round().astype(np.int32)], color=1)
-
-        # 边界碰撞
-        out_of_bounds = not (
-            (convex_hull[:, 0] > 0).all() and
-            (convex_hull[:, 0] < dims[0]).all() and
-            (convex_hull[:, 1] > 0).all() and
-            (convex_hull[:, 1] < dims[1]).all()
-        )
-
-        # 障碍物碰撞
-        crashed_obstacles = np.any(np.logical_and(agent_map, self.map_manager.obstacle_map))
-
-        # 位置修正
-        self.agent.x = float(np.clip(self.agent.x, 0, dims[0]))
-        self.agent.y = float(np.clip(self.agent.y, 0, dims[1]))
-
-        return out_of_bounds or crashed_obstacles
-
-    def _update_trajectory(self, previous_position: Tuple[int, int]):
-        """
-        更新机器人轨迹。
-
-        :param previous_position: 机器人上一步的位置。
-        """
-        current_position = self.agent.position_discrete
-        x_prev, y_prev = previous_position
-        x_curr, y_curr = current_position
-
-        # 确保坐标在有效范围内
-        x_prev = np.clip(x_prev, 0, self.map_manager.dimensions[0] - 1)
-        y_prev = np.clip(y_prev, 0, self.map_manager.dimensions[1] - 1)
-        x_curr = np.clip(x_curr, 0, self.map_manager.dimensions[0] - 1)
-        y_curr = np.clip(y_curr, 0, self.map_manager.dimensions[1] - 1)
-
-        cv2.line(self.trajectory_map, (x_prev, y_prev), (x_curr, y_curr), color=1, thickness=1)
-
-    def _calculate_reward(self, current_steer: float, previous_steer: float) -> float:
-        """
-        计算本步奖励。
-
-        :param current_steer: 当前转向角速度。
-        :param previous_steer: 上一步转向角速度。
-        :return: 本步奖励。
-        """
-        current_weed_count = self.map_manager.weed_map.sum(dtype=np.int32)
-        current_frontier_area = self.map_manager.field_frontier_map.sum(dtype=np.int32)
-        current_frontier_tv = total_variation_mat(self.map_manager.field_frontier_map).sum()
-
-        step_reward = self.reward_manager.calculate_step_reward(
-            current_steer=current_steer,
-            previous_steer=previous_steer,
-            current_frontier_area=current_frontier_area,
-            previous_frontier_area=self.previous_frontier_area,
-            current_frontier_tv=current_frontier_tv,
-            previous_frontier_tv=self.previous_frontier_tv,
-            current_weeds=current_weed_count,
-            previous_weeds=self.previous_weed_count
-        )
-
-        # 更新奖励相关状态
-        self.previous_weed_count = current_weed_count
-        self.previous_frontier_area = current_frontier_area
-        self.previous_frontier_tv = current_frontier_tv
-        self.previous_steer = current_steer
-
-        return step_reward
-
+    # 要实现不同的观测模式，还真要apf的在这里加载才可以
     def _get_observation(self) -> Dict[str, Union[np.ndarray, float]]:
         """
-        生成观测，包括图像观测、向量信息和杂草覆盖率。
-
-        :return: 观测字典。
+        基于新的 ObservationManager, 将 map_manager 中的地图打包为 maps_dict 并生成观测。
         """
-        obs_image = self.obs_manager.generate_observation(
-            agent=self.agent,
-            field_frontier_map=self.map_manager.field_frontier_map,
-            mist_map=self.mist_map,
-            weed_map=self.map_manager.weed_map,
-            obstacle_map=self.map_manager.obstacle_map,
-            trajectory_map=self.trajectory_map
-        )
-
-        # 向量信息：归一化的转向
-        vector_info = self.agent.last_steer / self.reward_manager.angular_range.mode
-
-        # 杂草覆盖率
-        weed_ratio = 1.0 - (self.previous_weed_count / max(1, self.map_manager.total_weed_count))
-
-
-        return {
-            "observation": obs_image,
-            "vector": float(vector_info),
-            "weed_ratio": float(weed_ratio)
+        # TODO: 现在这样获取也是不对的，应该从padding_info中获取，这个地方应该开放可拓展性，这里本质还是在给一个map_input_dict，怎么给就有很多方法了，但是不同任务的observation空间是不同的，这里就存在observation还要思考修改的地方
+        map_input_dict = {
+            key: {"map": self.maps_dict[key], "pad": 0.0 if key != "obstacle" else 1.0}
+            for key in ["field_frontier", "obstacle", "weed", "trajectory"]
         }
 
-    def reset(
-        self,
-        *,
-        seed: Optional[int] = None,
-        options: Optional[dict] = None
-    ) -> Tuple[Dict[str, Union[np.ndarray, float]], Dict[str, Any]]:
-        """
-        重置环境，返回初始观测和额外信息。
-
-        :param seed: 随机种子。
-        :param options: 重置选项。
-        :return: 初始观测和额外信息。
-        """
-        super().reset(seed=seed)
-        if seed is not None:
-            self.rng = np.random.default_rng(seed)
-
-        opts = options or {}
-        weed_distribution = opts.get("weed_distribution", "uniform")
-        weed_count = opts.get("weed_count", 100)
-        map_id = opts.get("map_id", self.rng.integers(0, len(self.map_manager.map_names)))
-        specific_scenario_dir = opts.get("specific_scenario_dir", None)
-        initial_position = opts.get("initial_position", None)
-        initial_direction = opts.get("initial_direction", None)
-
-        # 加载或随机生成地图
-        if specific_scenario_dir:
-            self.map_manager.load_maps_from_directory(specific_scenario_dir)
-            initial_pos, initial_dir = self.map_manager.find_initial_bounding_box()
-        else:
-            self.map_manager.load_field_frontier_map(map_id)
-            initial_pos, initial_dir = self.map_manager.find_initial_bounding_box()
-            self.map_manager.initialize_obstacle_map(agent_position=initial_pos)
-            self.map_manager.initialize_weed_distribution(weed_distribution, weed_count)
-
-        # 初始化机器人
-        self.agent.reset(
-            position=initial_position if initial_position else initial_pos,
-            direction=initial_direction if initial_direction else initial_dir
+        obs_img = self.observation_manager.generate_observation(
+            agent=self.agent,
+            maps_dict=map_input_dict
         )
 
-        # 初始化额外地图
-        dims = self.map_manager.dimensions
-        self.trajectory_map = np.zeros((dims[1], dims[0]), dtype=np.uint8)
-        self.mist_map = np.zeros((dims[1], dims[0]), dtype=np.uint8)
+        vector_obs = self.agent.last_steer / self.w_range.max
 
-        # 更新农田前沿和迷雾区域
-        self._update_maps_after_reset()
+        total_weed_count = self.map_manager.total_weed_count
+        current_weed_count = self.state_info["weed_count"]
+        weed_ratio = 1.0 - float(current_weed_count / total_weed_count) if total_weed_count > 0 else 1.0
 
-        # 初始化奖励相关状态
-        self.previous_weed_count = self.map_manager.weed_map.sum(dtype=np.int32)
-        self.previous_frontier_area = self.map_manager.field_frontier_map.sum(dtype=np.int32)
-        self.previous_frontier_tv = total_variation_mat(self.map_manager.field_frontier_map).sum()
-        self.current_step = 1
-        self.previous_steer = 0.0
+        return {
+            "observation": obs_img.astype(np.float32),
+            "vector": np.float32(vector_obs),
+            "weed_ratio": np.float32(weed_ratio),
+        }
 
-        # 获取初始观测
-        observation = self._get_observation()
-
-        return observation, {}
-
-    def _update_maps_after_reset(self):
-        """
-        根据机器人初始位置更新农田前沿和迷雾。
-        """
-        # 割除初始位置的杂草
-        self._cut_weeds()
-
-        # 更新农田前沿区域
-        self._update_field_frontier()
-
-        # 更新迷雾区域
-        self._update_mist()
-
+    # -----------------------------
+    # render
+    # -----------------------------
     def render(self) -> Optional[np.ndarray]:
-        """
-        渲染环境，返回 RGB 图像数组。
-
-        :return: 渲染后的图像数组，或 None 如果未指定渲染模式。
-        """
         if self.render_mode not in self.metadata["render_modes"]:
-            gym.logger.warn(
-                "You are calling render method without specifying any render mode. "
-                "You can specify the render_mode at initialization, "
-                f'e.g. gym.make("{self.spec.id}", render_mode="rgb_array")'
-            )
+            if hasattr(gym.logger, "warn"):
+                gym.logger.warn("You are calling render without specifying render_mode. Default is None.")
             return None
 
-        try:
-            import pygame
-        except ImportError as e:
-            raise gym.error.DependencyNotInstalled(
-                "pygame 未安装，请运行 `pip install pygame`。"
-            ) from e
+        if pygame is None:
+            raise gym.error.DependencyNotInstalled("pygame 未安装，请使用 pip install pygame。")
 
         if self.screen is None:
             pygame.init()
             if self.state_pixels:
-                width = self.obs_manager.state_size[0] * self.render_repeat_times
-                height = self.obs_manager.state_size[1] * self.render_repeat_times
-                self.screen = pygame.Surface((width, height))
+                w = self.state_size[0] * self.render_repeat_times
+                h = self.state_size[1] * self.render_repeat_times
+                self.screen = pygame.Surface((w, h))
             else:
-                map_width, map_height = self.map_manager.dimensions
-                self.screen = pygame.Surface((map_width * self.render_repeat_times, map_height * self.render_repeat_times))
+                w, h = self.state_info["dimensions"]
+                self.screen = pygame.Surface((w * self.render_repeat_times, h * self.render_repeat_times))
 
         if self.clock is None:
             self.clock = pygame.time.Clock()
@@ -527,88 +263,142 @@ class CppEnvBase(gym.Env):
         if self.state_pixels:
             img = self._render_first_person_view()
         else:
-            img = self._render_full_map()
+            img = self._render_map()
 
-        # 按比例缩放图像
+        # repeat
         img = img.repeat(self.render_repeat_times, axis=0).repeat(self.render_repeat_times, axis=1)
 
-        # 转换为 Pygame Surface 并绘制
         surf = pygame.surfarray.make_surface(img)
         self.screen.blit(surf, (0, 0))
 
-        # 返回图像数组
-        rendered_image = np.transpose(np.array(pygame.surfarray.pixels3d(self.screen)), (1, 0, 2))
-
-
+        arr3d = pygame.surfarray.pixels3d(self.screen)
+        rendered_image = np.transpose(arr3d, (1, 0, 2))
         return rendered_image
 
-    def _render_full_map(self) -> np.ndarray:
+    def _render_map(self) -> np.ndarray:
         """
-        渲染完整地图，返回 RGB 图像数组。
-
-        :return: 渲染后的完整地图图像。
+        渲染地图，包括障碍物、杂草、机器人轨迹、机器人视野、机器人位置等。
         """
-        map_width, map_height = self.map_manager.dimensions
-        rendered_map = np.ones((map_height, map_width, 3), dtype=np.uint8) * 255  # 白色背景
+        h, w = self.state_info["dimensions"][1], self.state_info["dimensions"][0]
+        rendered_map = np.ones((h, w, 3), dtype=np.uint8) * 255
 
-        # 农田前沿
-        frontier_map = (self.map_manager.field_frontier_map > 0)
-        rendered_map[frontier_map] = [76, 187, 23]  # 绿色
+        color_map = {
+            "field_frontier": (76, 187, 23), "covered_farmland_blend": (112, 173, 7), "obstacle": (30, 75, 130),
+            "weed": (255, 0, 0), "weed_undiscovered": (0, 0, 0), "weed_discovered": (255, 0, 0),
+            "covered_weed_blend": (0, 0, 0), "trajectory": (255, 38, 255), "robot_poly": (255, 0, 0),
+            "robot_vision": (192, 192, 192), "tv_frontier": (255, 38, 255), "tv_obstacle": (47, 82, 143)
+        }
 
-        # 障碍物
-        obstacle_map = (self.map_manager.obstacle_map > 0)
-        rendered_map[obstacle_map] = [30, 75, 130]  # 蓝色
+        base_render_items = [("field_frontier", "field_frontier", 1.0), ("obstacle", "obstacle", 1.0),
+                             ("trajectory", "trajectory", 1.0)]
+        for map_key, color_key, alpha_val in base_render_items:
+            if map_key in self.maps_dict:
+                rendered_map = apply_mask_with_color(rendered_map, self.maps_dict[map_key], color_map[color_key],
+                                                     alpha=alpha_val)
 
-        # 杂草
-        weed_map = (self.map_manager.weed_map > 0)
-        rendered_map[weed_map] = [255, 0, 0]  # 红色
+        if self.render_covered_farmland and "original_field_frontier" in self.maps_dict and "field_frontier" in self.maps_dict:
+            covered_mask = np.logical_and(self.maps_dict["original_field_frontier"],
+                                          np.logical_not(self.maps_dict["field_frontier"]))
+            rendered_map = apply_mask_with_color(rendered_map, covered_mask, color_map["covered_farmland_blend"],
+                                                 alpha=0.25)
 
-        # 轨迹
-        trajectory_map = (self.trajectory_map > 0)
-        rendered_map[trajectory_map] = [255, 38, 255]  # 紫色
+        cv2.ellipse(img=rendered_map, center=self.agent.position_discrete,
+                    axes=(int(self.agent.vision_length), int(self.agent.vision_length)),
+                    angle=self.agent.direction, startAngle=-int(self.agent.vision_angle / 2), endAngle=int(self.agent.vision_angle / 2),
+                    color=color_map["robot_vision"], thickness=-1)
 
-        # 绘制机器人
-        convex_hull = self.agent.convex_hull.round().astype(np.int32)
-        cv2.fillPoly(rendered_map, [convex_hull], color=(0, 0, 255))  # 蓝色表示机器人
 
-        # 添加障碍物边缘高亮
-        obstacle_edges = total_variation_mat(self.map_manager.obstacle_map)
-        rendered_map[obstacle_edges] = [47, 82, 143]  # 深蓝色
 
+        if "weed" in self.maps_dict and "field_frontier" in self.maps_dict:
+            weed_undiscovered = get_map_pasture_larger(
+                np.logical_and(self.maps_dict["weed"], self.maps_dict["field_frontier"]))
+            weed_discovered = get_map_pasture_larger(
+                np.logical_and(self.maps_dict["weed"], np.logical_not(self.maps_dict["field_frontier"])))
+            rendered_map = apply_mask_with_color(rendered_map, weed_undiscovered, color_map["weed_undiscovered"])
+            rendered_map = apply_mask_with_color(rendered_map, weed_discovered, color_map["weed_discovered"])
+
+        if self.render_covered_weed and "original_weed" in self.maps_dict and "weed" in self.maps_dict:
+            weed_covered = get_map_pasture_larger(
+                np.logical_and(self.maps_dict["original_weed"], np.logical_not(self.maps_dict["weed"])))
+            rendered_map = apply_mask_with_color(rendered_map, weed_covered, color_map["covered_weed_blend"], alpha=0.9)
+
+        cv2.fillPoly(rendered_map, [self.agent.convex_hull.round().astype(np.int32)], color_map["robot_poly"])
+
+        if self.render_tv:
+            if "field_frontier" in self.maps_dict:
+                mask_tv = total_variation_mat(self.maps_dict["field_frontier"])
+                rendered_map = apply_mask_with_color(rendered_map, mask_tv, color_map["tv_frontier"])
+            if "map_obstacle" in self.maps_dict:
+                mask_tv = total_variation_mat(self.maps_dict["map_obstacle"])
+                rendered_map = apply_mask_with_color(rendered_map, mask_tv, color_map["tv_obstacle"])
+
+        if self.render_mist and "mist" in self.maps_dict:
+            mist_map = self.maps_dict["mist"]
+            rendered_map = np.where(np.expand_dims(mist_map, axis=-1) == 1, (rendered_map * 0.7).astype(np.uint8),
+                                    rendered_map)
 
         return rendered_map
 
     def _render_first_person_view(self) -> np.ndarray:
         """
-        渲染第一人称视角的图像，返回 RGB 图像数组。
-
-        :return: 渲染后的第一人称视角图像。
+        截取并旋转地图到第一人称视角
         """
-        # 获取旋转裁剪后的观测图像
-        obs_dict = self._get_observation()
-        img_tensor = obs_dict["observation"]  # (C, H, W)
+        base_map = self._render_map().astype(np.float32)
+        noisy_y, noisy_x, noisy_dir = self.observation_manager._get_noisy_pose(self.agent)
 
-        # 转换为 (H, W, C)
-        img = img_tensor.transpose(1, 2, 0)
+        map_dict_for_render = {
+            "R": {"map": base_map[..., 0], "pad": 128.},
+            "G": {"map": base_map[..., 1], "pad": 128.},
+            "B": {"map": base_map[..., 2], "pad": 128.},
+        }
 
-        # 确保图像有 3 个通道
-        if img.shape[2] < 3:
-            img = np.repeat(img, 3, axis=2)
-        elif img.shape[2] > 3:
-            img = img[:, :, :3]
+        stacked_maps, pad_values = self.observation_manager.stack_maps(map_dict_for_render)
+        final_obs = self.observation_manager.extract_ego_observation(
+            maps=stacked_maps,
+            pad_values=pad_values,
+            center_y=noisy_y,
+            center_x=noisy_x,
+            direction_deg=noisy_dir,
+            patch_size=self.state_size
+        )
 
-        # 转换为 uint8
-        img_uint8 = np.clip(img * 255, 0, 255).astype(np.uint8)
-
-
-        return img_uint8
+        return final_obs.astype(np.uint8)
 
     def close(self):
-        """
-        关闭环境，释放资源。
-        """
-        if self.screen is not None:
-            import pygame
+        if self.screen is not None and pygame is not None:
             pygame.display.quit()
             pygame.quit()
             self.is_open = False
+
+
+if __name__ == "__main__":
+    if_render = True
+    episodes = 3
+    env = CppEnvBase(
+        render_mode='rgb_array' if if_render else None,
+        # state_pixels=True,
+        state_pixels=False,
+    )
+    env: CppEnvBase = HumanRendering(env)
+
+    for _ in range(episodes):
+        # reset_state = {
+        #     'seed': 120, 'options': {
+        #         'weed_dist': 'gaussian',
+        #         # 'map_id': 80,
+        #         "weed_num": 100
+        #     }
+        # }
+        reset_state = {}
+        obs, info = env.reset(**reset_state)
+        done = False
+        while not done:
+            action = env.action_space.sample()
+            # action = 1 * 21 + 10
+            obs, reward, done, _, info = env.step(action)
+            # obs, reward, done, _, info = env.step((0, 4))
+            print(reward)
+            if if_render:
+                env.render()
+
+    env.close()

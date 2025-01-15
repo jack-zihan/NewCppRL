@@ -15,7 +15,7 @@ class CppEnv(CppEnvBase):
         maps = np.stack((
             self.map_frontier,
             self.map_obstacle, # TODO: 障碍物按障碍物填充，现在的mask有问题，整得很复杂但是就是边界填充的问题，想办法化简一下
-            np.logical_and(self.map_weed, np.logical_not(self.map_frontier)), # 可观测的杂草
+            np.logical_and(self.map_weed, np.logical_not(self.map_frontier)), # 向外都是杂草，现在的mask不对，这是留给我的小坑？
             self.map_trajectory,
         ), axis=-1)
         mask = [0., 0., 1., 0.]

@@ -334,37 +334,6 @@ class CppEnvBase(gym.Env):
             obs_rotated = obs_rotated.reshape(*obs_rotated.shape, 1)
         return obs_rotated
 
-    def get_rotated_obs(self, maps: np.ndarray, mask: Sequence[float]) -> np.ndarray:
-        channel_num = maps.shape[-1]
-        ch_beg = 0
-        candidates = []
-        for i in range(0, channel_num, 4):
-            ch_end = min(i + 4, channel_num)
-            candidates.append(self.get_rotated_obs_(maps[:, :, ch_beg:ch_end], mask[ch_beg:ch_end]))
-            ch_beg = ch_end
-        if len(candidates) > 1:
-            candidates = np.concatenate(candidates, axis=-1)
-        else:
-            candidates = candidates[0]
-        return candidates
-
-    def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
-        raise NotImplementedError
-
-    def observation(self) -> dict[str, np.ndarray | float]:
-        maps, mask = self.get_maps_and_mask()
-        obs_rotated = self.get_rotated_obs(maps, mask)
-        obs_rotated_resize = cv2.resize(obs_rotated, self.state_downsize)
-        obs = obs_rotated_resize.transpose(2, 0, 1)
-        if self.use_sgcnn:
-            if self.use_global_obs:
-                obs = self.get_sgcnn_obs(obs, maps, mask)
-            else:
-                obs = self.get_sgcnn_obs(obs, None, None)
-        return {'observation': obs,
-                'vector': self.agent.last_steer / self.w_range.max,
-                'weed_ratio': 1 - self.weed_num_t / self.weed_num}
-
     def get_global_obs_(self, maps, mask: Sequence[float]):
         agent_y = self.agent.y
         agent_x = self.agent.x
@@ -407,6 +376,20 @@ class CppEnvBase(gym.Env):
         obs_global = obs_global.transpose(1, 2, 0)
         return obs_global
 
+    def get_rotated_obs(self, maps: np.ndarray, mask: Sequence[float]) -> np.ndarray: # for 4循环的目的是识别其中的障碍物，并添加正确掩码，这里要想办法变正确
+        channel_num = maps.shape[-1]
+        ch_beg = 0
+        candidates = []
+        for i in range(0, channel_num, 4):
+            ch_end = min(i + 4, channel_num)
+            candidates.append(self.get_rotated_obs_(maps[:, :, ch_beg:ch_end], mask[ch_beg:ch_end]))
+            ch_beg = ch_end
+        if len(candidates) > 1:
+            candidates = np.concatenate(candidates, axis=-1)
+        else:
+            candidates = candidates[0]
+        return candidates
+
     def get_global_obs(self, maps: np.ndarray, mask: Sequence[float]) -> np.ndarray:
         channel_num = maps.shape[-1]
         ch_beg = 0
@@ -421,6 +404,23 @@ class CppEnvBase(gym.Env):
             candidates = candidates[0]
         return candidates
 
+    def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
+        raise NotImplementedError
+
+    def observation(self) -> dict[str, np.ndarray | float]:
+        maps, mask = self.get_maps_and_mask()
+        obs_rotated = self.get_rotated_obs(maps, mask)
+        obs_rotated_resize = cv2.resize(obs_rotated, self.state_downsize)
+        obs = obs_rotated_resize.transpose(2, 0, 1)
+        if self.use_sgcnn:
+            if self.use_global_obs:
+                obs = self.get_sgcnn_obs(obs, maps, mask)
+            else:
+                obs = self.get_sgcnn_obs(obs, None, None)
+        return {'observation': obs,
+                'vector': self.agent.last_steer / self.w_range.max,
+                'weed_ratio': 1 - self.weed_num_t / self.weed_num}
+
     def get_sgcnn_obs(self, obs: np.ndarray,
                       maps: Optional[np.ndarray] = None,
                       mask: Optional[Sequence[float]] = None):  # 在obs的基础上做多尺度图
@@ -428,7 +428,7 @@ class CppEnvBase(gym.Env):
         obs_list = []
         center_size = self.state_downsize[0] // 2
         with torch.no_grad():
-            for _ in range(4):
+            for _ in range(4): #  从最小一层obs到最大一层obs，每次最大池化一次，然后crop sgcnn_size
                 obs_list.append(obs_[
                                 :,
                                 (center_size - self.sgcnn_size // 2):(center_size + self.sgcnn_size // 2),
@@ -631,7 +631,7 @@ class CppEnvBase(gym.Env):
     #     self.initialize_map_weed_noisy()
     #     self.initialize_map_weed_ori()
 
-    def load_maps_from_directory(self, directory: Union[str, Path]):
+    def load_maps_from_directory(self, directory: Union[str, Path]): # 之前就没有将边界加上地图的
         directory = Path(directory)
         self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
         self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
