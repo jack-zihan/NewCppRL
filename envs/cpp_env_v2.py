@@ -20,6 +20,8 @@ class CppEnv(CppEnvBase):
     render_tv = False
     render_covered_weed = True
     render_covered_farmland = True
+    # render_covered_weed = False
+    # render_covered_farmland = False
 
     @staticmethod
     def get_discounted_apf(map_apf: np.ndarray,
@@ -56,6 +58,8 @@ class CppEnv(CppEnvBase):
             apf_frontier = self.get_discounted_apf(apf_frontier, 30)
             apf_obstacle = self.get_discounted_apf(apf_obstacle, 10, pad=True)
             apf_weed = self.get_discounted_apf(apf_weed, 40, 1e-2)
+            # apf_weed = self.get_discounted_apf(apf_weed, 100, 1e-2)
+            # apf_frontier = self.get_discounted_apf(apf_frontier, 50)
             apf_trajectory = self.get_discounted_apf(apf_trajectory, 4)
         apf_obstacle = np.maximum(apf_obstacle, np.logical_and(self.map_obstacle, self.map_mist))
         maps_list = [

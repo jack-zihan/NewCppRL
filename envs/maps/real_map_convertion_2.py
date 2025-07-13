@@ -4,6 +4,76 @@ import cv2
 import os
 import json
 
+def echo_boudingbox(points, name="Unnamed points"):
+    """
+    Calculate and print bounding box information for a set of points
+    
+    Args:
+        points: Point set (numpy array or list of numpy arrays)
+        name: Name of the point set for display
+    """
+    if isinstance(points, list):
+        # Handle list of point sets (e.g., map_obstacle_edge_points)
+        total_area = 0
+        print(f"{name}:")
+        for i, point_set in enumerate(points):
+            if point_set is None or not isinstance(point_set, np.ndarray) or len(point_set) < 3:
+                print(f"  Set {i+1}: Not enough points to form a rectangle")
+                continue
+
+            # Ensure points are in the right format for OpenCV
+            pts = np.array(point_set, dtype=np.float32)
+            if pts.size == 0 or pts.ndim != 2 or pts.shape[1] != 2:
+                print(f"  Set {i+1}: Invalid point format")
+                continue
+
+            try:
+                rect = cv2.minAreaRect(pts)
+                width, height = rect[1]
+                area = width * height
+                total_area += area
+                print(f"  Set {i+1}: Width = {width:.2f}m, Height = {height:.2f}m, Area = {area:.2f}m²")
+            except Exception as e:
+                print(f"  Set {i+1}: Error calculating bounding box - {str(e)}")
+
+        if total_area > 0:
+            print(f"  Total Area: {total_area:.2f}m²")
+        else:
+            print(f"  No valid obstacle areas found")
+    else:
+        # Handle single point set (e.g., map_frontier_edge_points or map_weed_points)
+        if points is None or not isinstance(points, np.ndarray) or len(points) == 0:
+            print(f"{name}: No points available")
+            return
+
+        if len(points) < 3:  # Need at least 3 points for a rectangle
+            print(f"{name}: Not enough points to form a rectangle")
+            return
+
+        # Ensure points are in the right format for OpenCV
+        pts = np.array(points, dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[1] != 2:
+            print(f"{name}: Invalid point format - expected shape (N,2), got {pts.shape}")
+            return
+
+        # For weed points (which may be scattered), calculate axis-aligned bounding box
+        if "weed" in name.lower():
+            x_min, y_min = np.min(pts, axis=0)
+            x_max, y_max = np.max(pts, axis=0)
+            width = x_max - x_min
+            height = y_max - y_min
+            area = width * height
+            print(f"{name}: Width = {width:.2f}m, Height = {height:.2f}m, Area = {area:.2f}m²")
+        else:
+            # For other point sets, compute minimum area rectangle
+            try:
+                rect = cv2.minAreaRect(pts)
+                width, height = rect[1]
+                area = width * height
+                print(f"{name}: Width = {width:.2f}m, Height = {height:.2f}m, Area = {area:.2f}m²")
+            except Exception as e:
+                print(f"{name}: Error calculating bounding box - {str(e)}")
+
 def generate_maps(
     map_frontier_edge_points: np.ndarray,
     map_obstacle_edge_points: list[np.ndarray],
@@ -104,6 +174,13 @@ if __name__ == "__main__":
     real_map_point_dir = "/home/lzh/NewCppRL/envs/maps/real_true/your_output_file.json"
     map_frontier_edge_points, map_obstacle_edge_points, map_weed_points = load_map_data(real_map_point_dir)
 
+    # Output bounding box information for all point sets
+    print("\n=== Bounding Box Information ===")
+    echo_boudingbox(map_frontier_edge_points, "Map frontier edge points")
+    echo_boudingbox(map_obstacle_edge_points, "Map obstacle edge points")
+    echo_boudingbox(map_weed_points, "Map weed points")
+    print("===============================\n")
+
     # Define image size and save directory
     image_size = (400, 400)  # Width and height in pixels
     scale = 0.3  # Meters per pixel
@@ -121,3 +198,4 @@ if __name__ == "__main__":
         str(save_dir),
         scale=scale
     )
+

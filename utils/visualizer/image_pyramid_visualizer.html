@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D图像金字塔可视化</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+            background: #ffffff;
+            color: #333;
+            overflow: hidden;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            z-index: 100;
+            min-width: 300px;
+        }
+
+        #controls h3 {
+            margin-top: 0;
+            color: #2196f3;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        label input[type="checkbox"] {
+            margin-right: 8px;
+        }
+
+        input[type="number"], input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            background: #fff;
+            color: #333;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        input[type="checkbox"] {
+            width: auto;
+            cursor: pointer;
+            vertical-align: middle;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            background: #2196f3;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: #1976d2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(33, 150, 243, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        #resetViewBtn {
+            background: #ff9800;
+        }
+
+        #resetViewBtn:hover {
+            background: #f57c00;
+            box-shadow: 0 4px 8px rgba(255, 152, 0, 0.3);
+        }
+
+        #exportBtn {
+            background: #4caf50;
+            margin-top: 15px;
+        }
+
+        #exportBtn:hover {
+            background: #45a049;
+            box-shadow: 0 4px 8px rgba(76, 175, 80, 0.3);
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            cursor: grab;
+        }
+
+        #canvas-container:active {
+            cursor: grabbing;
+        }
+
+        .info {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            color: #666;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            color: #2196f3;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h3>🎯 图像金字塔控制面板</h3>
+
+        <div class="control-group">
+            <label for="imageInput">📷 选择图片:</label>
+            <input type="file" id="imageInput" accept="image/*">
+        </div>
+
+        <div class="control-group">
+            <label for="scaleFactor">🔍 缩放因子 (s):</label>
+            <input type="number" id="scaleFactor" value="2" min="1.1" max="5" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <label for="cropNum">📊 金字塔层数 (n):</label>
+            <input type="number" id="cropNum" value="4" min="1" max="10" step="1">
+        </div>
+
+        <div class="control-group">
+            <label for="layerSpacing">📏 层间距:</label>
+            <input type="number" id="layerSpacing" value="50" min="10" max="200" step="10">
+        </div>
+
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="resizeOption" style="margin-right: 8px;">
+                📐 统一尺寸（resize到最小图片大小）
+            </label>
+        </div>
+
+        <button id="applyBtn">🚀 应用设置</button>
+        <button id="resetViewBtn" style="background: #ff9800; margin-top: 5px;">🔄 重置视角</button>
+        <button id="exportBtn">💾 导出当前视图</button>
+    </div>
+
+    <div id="canvas-container"></div>
+    <div class="info">🖱️ 按住左键拖动旋转视角 | 滚轮缩放</div>
+    <div class="loading" id="loading">⏳ 处理中...</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, controls;
+        let pyramidGroup;
+        let currentImage = null;
+
+        // 初始化Three.js场景
+        function initScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+            scene.fog = new THREE.Fog(0xffffff, 500, 2000);
+
+            // 相机设置
+            camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                2000
+            );
+            camera.position.set(400, 300, 400);
+
+            // 渲染器设置
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                preserveDrawingBuffer: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 添加环境光和方向光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            directionalLight.position.set(100, 200, 100);
+            scene.add(directionalLight);
+
+            // 添加额外的补光
+            const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            fillLight.position.set(-100, 100, -100);
+            scene.add(fillLight);
+
+            // 简单的轨道控制器实现
+            setupOrbitControls();
+
+            // 创建金字塔组
+            pyramidGroup = new THREE.Group();
+            scene.add(pyramidGroup);
+
+            animate();
+        }
+
+        // 设置轨道控制器
+        function setupOrbitControls() {
+            const canvas = renderer.domElement;
+            let isMouseDown = false;
+            let mouseX = 0;
+            let mouseY = 0;
+            let targetRotationX = 0;
+            let targetRotationY = 0;
+            let rotationX = 0;
+            let rotationY = 0;
+            let distance = 600;
+
+            canvas.addEventListener('mousedown', (e) => {
+                isMouseDown = true;
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+            });
+
+            canvas.addEventListener('mousemove', (e) => {
+                if (!isMouseDown) return;
+
+                const deltaX = e.clientX - mouseX;
+                const deltaY = e.clientY - mouseY;
+
+                // 反转X方向，使拖动更直观
+                targetRotationY -= deltaX * 0.01;
+                targetRotationX += deltaY * 0.01;
+
+                // 限制垂直旋转角度，避免翻转
+                targetRotationX = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, targetRotationX));
+
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+            });
+
+            canvas.addEventListener('mouseup', () => {
+                isMouseDown = false;
+            });
+
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                distance += e.deltaY * 0.3;
+                distance = Math.max(100, Math.min(1000, distance));
+            });
+
+            controls = {
+                update: function() {
+                    rotationX += (targetRotationX - rotationX) * 0.1;
+                    rotationY += (targetRotationY - rotationY) * 0.1;
+
+                    camera.position.x = distance * Math.sin(rotationY) * Math.cos(rotationX);
+                    camera.position.y = distance * Math.sin(rotationX);
+                    camera.position.z = distance * Math.cos(rotationY) * Math.cos(rotationX);
+
+                    camera.lookAt(0, 0, 0);
+                }
+            };
+        }
+
+        // 创建图像金字塔
+        async function createImagePyramid(image, scaleFactor, cropNum, layerSpacing) {
+            // 清除现有金字塔
+            while(pyramidGroup.children.length > 0) {
+                pyramidGroup.remove(pyramidGroup.children[0]);
+            }
+
+            const loader = new THREE.TextureLoader();
+            const originalWidth = image.width;
+            const originalHeight = image.height;
+            const aspectRatio = originalWidth / originalHeight;
+
+            // 检查是否启用resize选项
+            const resizeEnabled = document.getElementById('resizeOption').checked;
+
+            // 计算最小尺寸（最顶层的尺寸）
+            const minScale = Math.pow(scaleFactor, cropNum);
+            const minWidth = originalWidth / minScale;
+            const minHeight = originalHeight / minScale;
+
+            // 从大到小创建图层（底部是原图，顶部是最小的）
+            for (let i = 0; i <= cropNum; i++) {
+                const scale = Math.pow(scaleFactor, i);
+                const actualWidth = originalWidth / scale;
+                const actualHeight = originalHeight / scale;
+
+                // 创建canvas
+                const canvas = document.createElement('canvas');
+
+                // 如果启用resize，所有层都使用最小尺寸
+                const displayWidth = resizeEnabled ? minWidth : actualWidth;
+                const displayHeight = resizeEnabled ? minHeight : actualHeight;
+
+                canvas.width = displayWidth;
+                canvas.height = displayHeight;
+                const ctx = canvas.getContext('2d');
+
+                // 计算裁剪区域（从原图中心裁剪）
+                const cropX = (originalWidth - actualWidth) / 2;
+                const cropY = (originalHeight - actualHeight) / 2;
+
+                // 绘制图像（如果resize启用，会将裁剪的图像缩放到最小尺寸）
+                ctx.drawImage(image, cropX, cropY, actualWidth, actualHeight, 0, 0, displayWidth, displayHeight);
+
+                // 创建纹理
+                const texture = new THREE.CanvasTexture(canvas);
+                texture.minFilter = THREE.LinearFilter;
+                texture.magFilter = THREE.LinearFilter;
+
+                // 创建平面几何体（水平放置）
+                const geometry = new THREE.PlaneGeometry(displayWidth, displayHeight);
+                const material = new THREE.MeshBasicMaterial({
+                    map: texture,
+                    side: THREE.DoubleSide,
+                    transparent: false
+                });
+
+                const plane = new THREE.Mesh(geometry, material);
+                // 水平放置（绕X轴旋转90度）
+                plane.rotation.x = -Math.PI / 2;
+                // 设置Y位置（底部是大图，顶部是小图）
+                plane.position.y = i * layerSpacing;
+
+                // 添加边框
+                const edges = new THREE.EdgesGeometry(geometry);
+                const lineMaterial = new THREE.LineBasicMaterial({
+                    color: 0x000000,
+                    linewidth: 2
+                });
+                const wireframe = new THREE.LineSegments(edges, lineMaterial);
+                plane.add(wireframe);
+
+                pyramidGroup.add(plane);
+            }
+
+            // 调整金字塔组位置使其居中
+            const totalHeight = cropNum * layerSpacing;
+            pyramidGroup.position.y = -totalHeight / 2;
+        }
+
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controls) {
+                controls.update();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // 事件监听器
+        document.getElementById('imageInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        currentImage = img;
+                        document.getElementById('applyBtn').disabled = false;
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        document.getElementById('applyBtn').addEventListener('click', async () => {
+            if (!currentImage) {
+                alert('请先选择一张图片！');
+                return;
+            }
+
+            const scaleFactor = parseFloat(document.getElementById('scaleFactor').value);
+            const cropNum = parseInt(document.getElementById('cropNum').value);
+            const layerSpacing = parseFloat(document.getElementById('layerSpacing').value);
+
+            document.getElementById('loading').style.display = 'block';
+
+            await createImagePyramid(currentImage, scaleFactor, cropNum, layerSpacing);
+
+            document.getElementById('loading').style.display = 'none';
+        });
+
+        document.getElementById('resetViewBtn').addEventListener('click', () => {
+            // 重置相机位置和旋转
+            if (controls && controls.reset) {
+                controls.reset();
+            }
+        });
+
+        document.getElementById('exportBtn').addEventListener('click', () => {
+            renderer.render(scene, camera);
+            const dataURL = renderer.domElement.toDataURL('image/png');
+
+            const link = document.createElement('a');
+            link.download = 'image-pyramid-' + Date.now() + '.png';
+            link.href = dataURL;
+            link.click();
+        });
+
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // 初始化场景
+        initScene();
+    </script>
+</body>
+</html>

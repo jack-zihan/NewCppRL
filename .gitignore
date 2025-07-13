@@ -19,3 +19,11 @@
 /.vscode/
 
 /ckpt/
+
+*mp4
+/logs/
+*pyc
+/utils/real_world_video_process/real_world_img
+/utils/real_world_video_process/templates
+/utils/real_world_video_process/video
+/utils/real_world_video_process/process_data
