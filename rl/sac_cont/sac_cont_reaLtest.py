@@ -19,7 +19,7 @@ real_map_dir = f'{base_dir}/envs/maps/real_true'
 cfg = DictConfig(yaml.load(open(f'{base_dir}/configs/env_config.yaml'), Loader=yaml.FullLoader))
 
 render_human = True
-record_video = True
+record_video = False
 # record_video = False
 # rocord_state = True
 rocord_state = False
@@ -43,7 +43,7 @@ env = gym.make(
 )
 
 if record_video:
-    render_human = False
+    render_human = True
     env = RecordVideo(env, video_folder=video_save_path, name_prefix=name_prefix,episode_trigger=lambda x: True)
     env.metadata['render_fps'] = 2
 
@@ -71,7 +71,7 @@ with set_exploration_type(exploration_type), torch.no_grad():
             # 'map_id': 80,
             "weed_num": 200,
             # "weed_num": 50,
-            # "specific_scenario_dir": real_map_dir,
+            "specific_scenario_dir": real_map_dir,
             # 'initial_position': (200, 200),  # X 和 Y 坐标
             # 'initial_direction': 360.0,
         }

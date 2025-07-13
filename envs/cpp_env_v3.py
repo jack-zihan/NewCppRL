@@ -12,6 +12,7 @@ from envs.utils import get_map_pasture_larger
 class CppEnv(CppEnvBase):
     """
     This env contains mist that the agent must explore to know what's inside.
+    2025 0526 感觉像有噪声，但是无迷雾
     """
 
     def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
@@ -48,8 +49,8 @@ if __name__ == "__main__":
     episodes = 3
     env = CppEnv(
         render_mode='rgb_array' if if_render else None,
-        # state_pixels=True,
-        state_pixels=False,
+        state_pixels=True,
+        # state_pixels=False,
     )
     env: CppEnv = HumanRendering(env)
 

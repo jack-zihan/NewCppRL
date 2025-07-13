@@ -25,8 +25,10 @@ class CppEnvBase(gym.Env):
         "render_fps": 50,
     }
 
-    vision_length = 28
+    # vision_length = 60
     vision_angle = 75
+    vision_length = 28
+    # vision_angle = 75
 
     v_range = NumericalRange(0.0, 3.5)
     w_range = NumericalRange(-28.6, 28.6)
@@ -270,6 +272,7 @@ class CppEnvBase(gym.Env):
                                    )
         # Weed
         reward_weed = 20.0 * (self.weed_num_t - weed_num_tp1)
+        # reward_weed = 0.0 * (self.weed_num_t - weed_num_tp1)
         reward_extra = self.get_extra_reward(steer_tp1, x_t, y_t, x_tp1, y_tp1)
         # Summary
         reward = (reward_const
@@ -619,6 +622,7 @@ class CppEnvBase(gym.Env):
         # Initialize other attributes
         self.map_trajectory = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
         self.map_mist = np.zeros((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
+        # self.map_mist = np.ones((self.dimensions[1], self.dimensions[0]), dtype=np.uint8)
 
         # Update map_frontier and map_mist based on agent's initial position
         self.update_maps_after_reset()

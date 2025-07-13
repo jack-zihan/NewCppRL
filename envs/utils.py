@@ -13,14 +13,22 @@ def total_variation(images: np.ndarray) -> int:
     return tot_var
 
 
-def total_variation_mat(images: np.ndarray) -> np.ndarray:
-    mask_tv_cols = images[1:, :] - images[:-1, :] != 0
-    mask_tv_cols = np.pad(mask_tv_cols, pad_width=[[0, 1], [0, 0]], mode='constant')
-    mask_tv_rows = images[:, 1:] - images[:, :-1] != 0
-    mask_tv_rows = np.pad(mask_tv_rows, pad_width=[[0, 0], [0, 1]], mode='constant')
-    mask_tv = np.logical_or(mask_tv_rows, mask_tv_cols)
-    return mask_tv
+# def total_variation_mat(images: np.ndarray) -> np.ndarray:
+#     mask_tv_cols = images[1:, :] - images[:-1, :] != 0
+#     mask_tv_cols = np.pad(mask_tv_cols, pad_width=[[0, 1], [0, 0]], mode='constant')
+#     mask_tv_rows = images[:, 1:] - images[:, :-1] != 0
+#     mask_tv_rows = np.pad(mask_tv_rows, pad_width=[[0, 0], [0, 1]], mode='constant')
+#     mask_tv = np.logical_or(mask_tv_rows, mask_tv_cols)
+#     return mask_tv
 
+
+def total_variation_mat(mat):
+    tv = np.zeros_like(mat)
+    tv[1:, :] |= (mat[1:, :] != mat[:-1, :])
+    tv[:-1, :] |= (mat[1:, :] != mat[:-1, :])
+    tv[:, 1:] |= (mat[:, 1:] != mat[:, :-1])
+    tv[:, :-1] |= (mat[:, 1:] != mat[:, :-1])
+    return tv
 
 def get_map_pasture_larger(map_pasture: np.ndarray):
     map_pasture_larger = map_pasture

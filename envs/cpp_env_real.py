@@ -42,7 +42,7 @@ class CppEnvReal(CppEnv):
 if __name__ == "__main__":
     if_render = True
     episodes = 3
-    real_map_dir = '/home/lzh/NewCppRL/envs/maps/real'
+    real_map_dir = '/home/lzh/NewCppRL/envs/maps/real_true'
     env = CppEnvReal(
         render_mode='rgb_array'if if_render else None,
         # state_pixels=True,
@@ -59,7 +59,7 @@ if __name__ == "__main__":
             'weed_dist': 'gaussian',
             # 'map_id': 80,
             "weed_num": 100,
-            # "specific_scenario_dir": real_map_dir
+            # "specific_scenario_dir": real_map_dir,
             'initial_position': (150.0, 200.0),  # X 和 Y 坐标
             'initial_direction': 360.0,
         })
