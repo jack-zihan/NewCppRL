@@ -34,22 +34,11 @@ from envs_new.cpp_env_v3 import CppEnv as CppEnvV3
 # Factory and convenience functions
 from envs_new.environment_factory import (
     EnvironmentFactory,
-    make_env,
-    make_simple_env,
-    make_apf_env, 
-    make_exploration_env
+    make_env
 )
 
 # Configuration system
-from envs_new.components.config.environment_config import (
-    EnvironmentConfig,
-    MapConfig,
-    AgentConfig,
-    ActionConfig,
-    ObservationConfig,
-    RewardConfig,
-    RenderConfig
-)
+from envs_new.components.config.environment_config import EnvironmentConfig
 
 # Performance monitoring
 from envs_new.components.performance_monitor import (
@@ -62,10 +51,9 @@ from envs_new.components.performance_monitor import (
 )
 
 # Component classes for extension
-from envs_new.components.reward.reward_system import RewardComponent, RewardManager
-from envs_new.components.observation.observation_strategy import ObservationStrategy
-from envs_new.components.map.map_loader import MapLoader
-from envs_new.components.map.map_generator import MapGenerator
+from envs_new.components.reward.reward_system import RewardSystem
+from envs_new.components.observation.observation_generator import ObservationGenerator
+from envs_new.components.map.map_generator import ScenarioGenerator
 
 __version__ = "2.0.0"
 
@@ -79,18 +67,9 @@ __all__ = [
     # Factory system
     'EnvironmentFactory',
     'make_env',
-    'make_simple_env',
-    'make_apf_env',
-    'make_exploration_env',
     
     # Configuration
     'EnvironmentConfig',
-    'MapConfig',
-    'AgentConfig', 
-    'ActionConfig',
-    'ObservationConfig',
-    'RewardConfig',
-    'RenderConfig',
     
     # Performance monitoring
     'performance_monitor',
@@ -101,9 +80,7 @@ __all__ = [
     'reset_performance_metrics',
     
     # Extension points
-    'RewardComponent',
-    'RewardManager',
-    'ObservationStrategy',
-    'MapLoader',
-    'MapGenerator',
+    'RewardSystem',
+    'ObservationGenerator',
+    'ScenarioGenerator',
 ]

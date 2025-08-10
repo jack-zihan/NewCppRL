@@ -1,0 +1,29 @@
+# REACT算法配置（反应式）
+algorithm:
+  name: "REACT"
+  type: "reactive_planning"
+  
+# 算法特定参数
+parameters:
+  # 反应式参数
+  reactive_mode: true
+  random_exploration: true
+  max_attempts: 50
+  
+  # 目标生成
+  random_goals: true
+  goal_generation_bounds: [0, 600]  # [width, height]
+  
+  # 路径验证
+  path_validation: true
+  collision_checking: true
+  
+# 覆盖策略
+coverage:
+  pattern: "reactive_random"
+  exploration_weight: 0.8
+  
+# 性能参数
+performance:
+  max_iterations: 50    # REACT特有的较少迭代次数
+  timeout_seconds: 300

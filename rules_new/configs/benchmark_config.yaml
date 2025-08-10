@@ -1,0 +1,130 @@
+# 基准测试配置文件
+# 用于配置7个算法的标准化测试
+
+benchmark:
+  # 算法配置
+  algorithms:
+    JUMP:
+      enabled: true
+      description: "JUMP路径规划算法"
+      params:
+        step_size: 10
+        max_iterations: 1000
+    
+    SNAKE:
+      enabled: true
+      description: "SNAKE路径规划算法"
+      params:
+        stripe_width: 20
+        turn_radius: 15
+    
+    R_SNAKE:
+      enabled: true
+      description: "改进的SNAKE算法"
+      params:
+        stripe_width: 20
+        turn_radius: 15
+        optimization: true
+    
+    BCP:
+      enabled: true
+      description: "BCP路径规划算法"
+      params:
+        cell_size: 25
+        coverage_threshold: 0.98
+    
+    REACT:
+      enabled: true
+      description: "REACT反应式路径规划"
+      params:
+        lookahead_distance: 50
+        reaction_threshold: 0.3
+    
+    NN_baseline:
+      enabled: true
+      description: "神经网络基线模型"
+      model_path: "ckpt/sac_baseline_continuous_t[01100]_r[2570.25=2509.63~2623.36].pt"
+      params:
+        device: "cpu"
+        deterministic: true
+    
+    NN_ours:
+      enabled: true
+      description: "我们的神经网络模型"
+      model_path: "ckpt/t[02600]_r[2731.41=2717.75~2750.74].pt"
+      params:
+        device: "cpu"
+        deterministic: true
+
+  # 场景配置
+  scenarios:
+    # 测试种子
+    seeds: [25, 27, 47, 21, 31]
+    
+    # 难度等级
+    difficulties: ["easy", "medium", "hard"]
+    
+    # 杂草分布
+    weed_distributions: ["gaussian", "uniform"]
+    
+    # 噪声级别
+    noise_levels: ["no_noise"]  # 可以添加 "low_noise", "medium_noise", "high_noise"
+    
+  # 指标配置
+  metrics:
+    # 覆盖率阈值
+    coverage_thresholds: [0.90, 0.95, 0.98]
+    
+    # 是否收集完整轨迹
+    collect_trajectory: true
+    
+    # 是否收集碰撞信息
+    collect_collision: true
+    
+    # 最大步数限制
+    max_steps: 1000
+    
+    # 超时时间（秒）
+    timeout: 60
+  
+  # 输出配置
+  output:
+    # 是否在场景完成时保存图片
+    save_finished_picture: false  # 可通过命令行参数覆盖
+    
+    # 是否保存轨迹数据
+    save_trajectories: true
+    
+    # 是否保存统计信息
+    save_statistics: true
+    
+    # 是否创建对比图
+    create_comparison_plots: true
+    
+    # 图片格式
+    image_format: "png"
+    
+    # 图片DPI
+    image_dpi: 100
+  
+  # 并行执行配置
+  parallel:
+    # 是否启用并行
+    enabled: true
+    
+    # 最大工作进程数（null表示使用CPU核心数）
+    max_workers: null
+    
+    # 批处理大小
+    batch_size: 10
+  
+  # 日志配置
+  logging:
+    # 日志级别
+    level: "INFO"
+    
+    # 是否保存日志文件
+    save_to_file: true
+    
+    # 日志格式
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

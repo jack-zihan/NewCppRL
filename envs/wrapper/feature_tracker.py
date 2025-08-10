@@ -1,8 +1,7 @@
 import gymnasium as gym
 import numpy as np
-from typing import Dict, Any, Optional, Tuple
-import cv2
-from envs.utils import get_map_pasture_larger, total_variation_mat
+from typing import Dict, Any
+
 
 class FeatureTracker(gym.Wrapper):
     """A wrapper that captures environment features for visualization and analysis."""

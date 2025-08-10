@@ -1,0 +1,25 @@
+env:
+  params:
+    action_type: continuous
+    id: Pasture-v5
+    map_dir: envs/maps/complex_field/farmland
+    noise_direction: null
+    noise_position: null
+    noise_weed: null
+    num_obstacles_range: !!python/tuple
+    - 0
+    - 0
+    state_downsize: !!python/tuple
+    - 128
+    - 128
+    state_size: !!python/tuple
+    - 128
+    - 128
+    use_apf: false
+    use_box_boundary: true
+    # V5 强制使用SGCNN和global_obs，这里的设置会被覆盖
+    use_global_obs: true
+    use_sgcnn: true
+    use_traj: true
+    # V5特有的方向场奖励权重
+    direction_field_weight: 0.01

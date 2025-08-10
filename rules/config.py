@@ -6,38 +6,32 @@ class Config:
     # 环境参数
     W = 600
     H = 600
-    ENV_NAME = "Pasture"
-    RENDER_MODE = 'rgb_array'
-    ACTION_TYPE = "continuous"
-    WEED_COUNT = 50
-    GAUSSIAN_WEED = True
+    # ENV_NAME = "Pasture-v2"
+    # RENDER_MODE = 'rgb_array'
+    # ACTION_TYPE = "continuous"
+    # WEED_COUNT = 50
+    # GAUSSIAN_WEED = True
     RETURN_MAP = True
     NUM_OBSTACLE_MIN = 0
     NUM_OBSTACLE_MAX = 0
-    FARM_VERTICES = np.array([
-        [30, 30],
-        [370, 30],
-        [370, 370],
-        [70, 370]
-    ])
+
 
     # 小车参数
-    CAR_WIDTH = 4
-    SIGHT_WIDTH = 35
-    SIGHT_LENGTH = 50
-    TURNING_RADIUS = 7
+    CAR_WIDTH = 5
+    SIGHT_WIDTH = 24
+    SIGHT_LENGTH = 24
+    # TURNING_RADIUS = 7
 
     # 路径设置
     DATA_DIR = 'path/to/data'
-    MODEL_SAVE_PATH = 'path/to/save/model'
-    LOG_DIR = 'path/to/logs'
+    MODEL_SAVE_PATH = ''
+    LOG_DIR = 'rules/logs'
+    
+    SEED = 0
 
-    # 其他配置项
-    # TASK_TYPE = "JUMP"
+    # # JUMP SNAKE BCP R_SNAKE REACT # REACT不应该设置init_x y
     # TASK_TYPE = "SNAKE"
-    # TASK_TYPE = "R_SNAKE"
-    TASK_TYPE = "REACT"  # JUMP SNAKE BCP R_SNAKE REACT # REACT不应该设置init_x y
-    # TASK_TYPE = "BCP"
 
-    RANDOM_SEED = 42
+
+    SEED = 0
     DEBUG_MODE = True

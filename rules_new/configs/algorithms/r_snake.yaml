@@ -1,0 +1,25 @@
+# R_SNAKE算法配置（受限SNAKE）
+algorithm:
+  name: "R_SNAKE"
+  type: "coverage_planning"
+  
+# 算法特定参数
+parameters:
+  # 受限搜索参数
+  restricted_search: true
+  vertical_constraint: true
+  constraint_width: 1.5  # 约束宽度倍数
+  
+  # 方向控制
+  upward_bias: true
+  direction_tolerance: 0.1
+  
+# 覆盖策略
+coverage:
+  pattern: "restricted_greedy"
+  boundary_aware: true
+  
+# 性能参数
+performance:
+  max_iterations: 5000
+  timeout_seconds: 300

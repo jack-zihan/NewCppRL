@@ -1,55 +1,66 @@
+from pathlib import Path as FilePath
+import sys
+
+# 设置基础路径（项目根目录）
+BASE_DIR = FilePath(__file__).parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+def to_absolute_path(path):
+    """将路径转换为绝对路径"""
+    p = FilePath(path)
+    return str(p if p.is_absolute() else BASE_DIR / p)
+
 import math
 import random
-
 import dubins
 import gymnasium as gym
 import numpy as np
 from gymnasium.wrappers import HumanRendering
 from matplotlib.path import Path
 from shapely.geometry import Point, Polygon, LineString
-
-import envs  # noqa
-from config import Config
-from envs.cpp_env import CppEnvironment
+from rules.config import Config
+import os
+import csv
+from rules.env_make import get_env
+import time
 
 '''
 获取position需要把xy对调 长宽都是对调 并且返回的rad是y方向相反的  real_radians 是正常00在左下的坐标系下的。
 '''
 store = None
 
-render = True
-env = gym.make(  # noqa
-    Config.ENV_NAME,
-    render_mode=Config.RENDER_MODE,
-    action_type=Config.ACTION_TYPE,
-    # weed_count=Config.WEED_COUNT,
-    # gaussian_weed=Config.GAUSSIAN_WEED,
-    # return_map=Config.RETURN_MAP,
-    # obstacle_radius_range=(Config.NUM_OBSTACLE_MIN, Config.NUM_OBSTACLE_MAX),
-)
+env, _ = get_env()
 
-if render:
-    env: CppEnvironment = HumanRendering(env)  # noqa
-if render:
-    env.render()
-
-task_type = Config.TASK_TYPE
-
-obs, _ = env.reset()
+task_type = "R_SNAKE"
 
 agent_width = Config.CAR_WIDTH
-sight_width = Config.SIGHT_WIDTH  # 不精准
+sight_width = Config.SIGHT_WIDTH
 sight_length = Config.SIGHT_LENGTH
-agent_position = [env.agent.y, env.agent.x]
+agent_position = [env.agent.y, env.agent.x] 
 W = Config.W
 H = Config.H
-turning_radius = Config.TURNING_RADIUS
+# turning_radius = Config.TURNING_RADIUS
+w_max_rad = abs(env.w_range.max) * (math.pi / 180)
+turning_radius = env.v_range.max / w_max_rad
 farm_vertices = env.min_area_rect[0][:, 0, ::-1]
+init_weed = env.map_weed.sum()
 
 # farm_vertices = Config.FARM_VERTICES
 
 discovered = []
 rad = 0
+cover_90,cover_95, cover_98,cover,dist_list = -1, -1, -1, [], []
+
+difficulty = "easy"
+save_path = BASE_DIR / 'rules' / 'logs' / f"coverage_results_{task_type}_{difficulty}.csv"
+weed_dist = "gaussian"
+random_seed = 25
+map_id = 2
+done = False
+overall_length = 0
+
+
 
 
 def is_point_in_polygon(point, vertices):
@@ -72,34 +83,86 @@ def find_longest_edge(vertices):
 
 longest_edge = find_longest_edge(farm_vertices)
 
-
+def save_data_to_csv(file_path, weed_dist, random_seed, map_id, collapse, cover_90, cover_95, cover_98,cover, dist_list):
+    file_path = to_absolute_path(file_path)  # 确保路径是绝对路径
+    file_exists = os.path.isfile(file_path)
+    with open(file_path, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["weed_dist","random_seed", "map_id", "collapse", "cover_90", "cover_95", "cover_98", "cover", "dist_list"])
+        cover_str = ",".join(map(str, cover))
+        dist_str = ",".join(map(str, dist_list))
+        writer.writerow([weed_dist, random_seed, map_id, collapse, cover_90, cover_95, cover_98,cover_str, dist_str])
 def go(p2):  # verified
+    global done
     global discovered
     global rad
     global agent_position
     global agent_width
+    global cover_98
+    global cover_95
+    global cover_90
+    global overall_length
+    global cover
+    global dist_list
+    prev_position = agent_position
     radian = math.atan2(p2[1] - agent_position[1], p2[0] - agent_position[0])
     length = math.sqrt((p2[0] - agent_position[0]) ** 2 + (p2[1] - agent_position[1]) ** 2)
     delta_angle = - (radian - rad) % (2 * math.pi)
     delta_angle = delta_angle - 2 * math.pi if delta_angle > math.pi else delta_angle
     delta_angle = math.degrees(delta_angle)
-    if delta_angle > 0.5:
-        print(1)
-    obs, reward, done, truncated, _ = env.step([length, delta_angle])
+    
+    env.set_action_type("continuous")
+
+    obs, reward, done, time_out, _ = env.step([length, delta_angle])
 
     agent_position = [env.agent.y, env.agent.x]
+    
+    distance = np.linalg.norm(np.array(agent_position) - np.array(prev_position))
+    overall_length += distance
     rad = np.pi / 2 - math.radians(env.agent.direction)
     discovered = np.argwhere(np.logical_and(env.map_weed, np.logical_not(env.map_frontier)) == 1)
     discovered = [point for point in discovered if is_point_in_polygon(point, farm_vertices)]
-    global store
-    if store is None:
-        store = env.map_frontier
+    cover_rate = (init_weed - env.map_weed.sum()) / init_weed
+    
+    # methods = [np.floor, round, np.ceil, int]
+    # agent_position_int = next(((int(m(agent_position[0])), int(m(agent_position[1]))) for m in methods
+    #     if 0 <= (p := (int(m(agent_position[0])), int(m(agent_position[1]))))[0] < env.map_obstacle.shape[0] 
+    #     and 0 <= p[1] < env.map_obstacle.shape[1] 
+    #     and env.map_obstacle[p[0], p[1]] == 1), None)
+
+    if cover_rate >= 0.98:
+        cover_98 = overall_length
+    elif cover_rate >= 0.95:
+        cover_95 = overall_length
+    elif cover_rate >= 0.90:
+        cover_90 = overall_length
+    cover.append(cover_rate)
+    dist_list.append(overall_length)
+    if done:
+        if env.check_collision():
+            save_data_to_csv(save_path, weed_dist, random_seed, map_id, 1, cover_90, cover_95, cover_98, cover, dist_list)
+            exit()
+        else:
+            save_data_to_csv(save_path, weed_dist, random_seed, map_id, 0, cover_90, cover_95, cover_98, cover, dist_list)
+            exit()
+        
+    # global store
+    # if store is None:
+    #     store = env.map_frontier
 
 
-def navigate(p2):
+def navigate(goal):
     global agent_position
-    while abs(p2[0] - agent_position[0]) > 1 or abs(p2[1] - agent_position[1]) > 1:
-        go(p2)
+    vector = np.array(goal) - np.array(agent_position)
+    distance = np.linalg.norm(vector)
+    num_steps = int(distance // 2)
+    step_vector = vector / num_steps
+    waypoints = [agent_position + step_vector * i for i in range(1, num_steps + 1)]
+    waypoints.append(goal)
+    for p2 in waypoints:
+        while abs(p2[0] - agent_position[0]) > 1 or abs(p2[1] - agent_position[1]) > 1:
+            go(p2)
 
 
 def dubins_navigate(p2, r):
@@ -108,7 +171,49 @@ def dubins_navigate(p2, r):
 
     for point in configurations[1:]:
         navigate(list(point[:2]))
-    print(1)
+    
+def dubins_navigate_obstacle(p2, r, max_attempts=5):
+    path = dubins.shortest_path((agent_position[0], agent_position[1], rad), (p2[0], p2[1], p2[2]), r)
+    configurations, _ = path.sample_many(0.5)
+
+    for attempt in range(max_attempts):
+        path_clear = True
+        new_path = []
+        
+        for point in configurations[1:]:
+            x, y = int(point[0]), int(point[1])
+            if 0 <= x < W and 0 <= y < H:
+                if env.map_obstacle[y, x] == 1:
+                    path_clear = False
+                    # 尝试绕过障碍物，通过微调当前点的方向
+                    detour_point = local_adjustment(point, r)
+                    if detour_point is not None:
+                        new_path.append(detour_point)
+                    else:
+                        print("Detour failed, obstacle is too close.")
+                        break
+                else:
+                    new_path.append(point)
+
+        if path_clear or len(new_path) == len(configurations) - 1:
+            # 如果路径清晰，或者已经成功绕开障碍物
+            for point in new_path:
+                navigate(list(point[:2]))
+            print("Path successfully navigated.")
+            return True
+
+    print("Failed to find a clear path after multiple attempts.")
+    return False
+
+def local_adjustment(point, r):
+    # 基于当前点，尝试绕过障碍物，返回调整后的点
+    # 调整策略：尝试调整方向或者移动位置
+    detour_x = point[0] + random.uniform(-r, r)  # 在允许的范围内调整
+    detour_y = point[1] + random.uniform(-r, r)
+    if 0 <= detour_x < W and 0 <= detour_y < H and env.map_obstacle[int(detour_y), int(detour_x)] == 0:
+        return [detour_x, detour_y, point[2]]  # 保持相同的方向
+    return None
+
 
 
 def find_longest_edge(farm_vertices):
@@ -269,22 +374,28 @@ path_points = []
 y_offset = -diag_length + agent_width / 2
 turn = True
 
-check = math.inf
+check = 5000000
 empty = 0
 init_start, init_end = [], []
-
+starting = False
 if task_type == 'REACT':
+    
     times = 0
+    start_time = time.time()
     while times < 50:
+        if time.time() - start_time > 300: 
+            save_data_to_csv(save_path, weed_dist, random_seed, map_id, 0, cover_90, cover_95, cover_98, cover, dist_list)
+            print("运行时间超过5分钟，程序已退出。")
+            sys.exit()
+
         rand_goal = [random.uniform(0, W), random.uniform(0, H)]
         start = agent_position
         end = rand_goal
         x_points = []
         line = LineString([start, end])
-        if polygon.intersects(line):
-            for i in np.arange(0, line.length, 1):
-                interpolated_point = np.array(line.interpolate(i).coords[0])
-                x_points.append(interpolated_point)
+        for i in np.arange(0, line.length, 1):
+            interpolated_point = np.array(line.interpolate(i).coords[0])
+            x_points.append(interpolated_point)
 
         valid_points = [point for point in x_points if
                         0 <= int(point[1]) < H and 0 <= int(point[0]) < W and mask[int(point[1]), int(point[0])] == 1]
@@ -306,30 +417,41 @@ if task_type == 'REACT':
             p_i += 1
         times += 1
 
-
 else:
+    start_time = time.time()
     while y_offset < diag_length:
-
+        if time.time() - start_time > 300: 
+            save_data_to_csv(save_path, weed_dist, random_seed, map_id, 0, cover_90, cover_95, cover_98, cover, dist_list)
+            print("运行时间超过5分钟，程序已退出。")
+            sys.exit()
         x_points = []
         new_start = [start[0] + y_offset * np.cos(real_radians + np.pi / 2) - diag_length * np.cos(real_radians),
                      start[1] + y_offset * np.sin(real_radians + np.pi / 2) - diag_length * np.sin(real_radians)]
         new_end = [end[0] + y_offset * np.cos(real_radians + np.pi / 2) + diag_length * np.cos(real_radians),
                    end[1] + y_offset * np.sin(real_radians + np.pi / 2) + diag_length * np.sin(real_radians)]
         line = LineString([new_start, new_end])
-        if polygon.intersects(line):
-            for i in np.arange(0, line.length, 1):
-                interpolated_point = np.array(line.interpolate(i).coords[0])
-                x_points.append(interpolated_point)
+        # if polygon.intersects(line):
+        #     for i in np.arange(0, line.length, 1):
+        #         interpolated_point = np.array(line.interpolate(i).coords[0])
+        #         x_points.append(interpolated_point)
+        
+        for i in np.arange(0, line.length, 1):
+            interpolated_point = np.array(line.interpolate(i).coords[0])
+            x_points.append(interpolated_point)
 
+
+        # valid_points = [point for point in x_points if
+        #                 0 <= int(point[1]) < H and 0 <= int(point[0]) < W and mask[int(point[1]), int(point[0])] == 1]
         valid_points = [point for point in x_points if
                         0 <= int(point[1]) < H and 0 <= int(point[0]) < W and mask[int(point[1]), int(point[0])] == 1]
+
         if valid_points:
             if len(init_start) == 0:
                 init_start = new_start
                 init_end = new_end
             turn = not turn
 
-        if y_offset == check:  # 这个结束方式不严谨
+        if int(y_offset) == int(check):  # 这个结束方式不严谨
             if len(valid_points) == 0:
                 empty += 1
         if empty >= 100:
@@ -344,8 +466,16 @@ else:
         rad_n = (rad_n + math.pi) % (2 * math.pi) - math.pi
 
         if valid_points:
-            dubins_navigate([valid_points[0][0], valid_points[0][1], rad_n], turning_radius)
-
+            if not starting:
+                env.agent.x = valid_points[0][1]
+                env.agent.y = valid_points[0][0]
+                env.agent.direction = (math.degrees(np.pi / 2 - turning_radius) % 360)
+                agent_position = valid_points[0]
+                rad = turning_radius
+                starting = True
+            else:
+                dubins_navigate([valid_points[0][0], valid_points[0][1], rad_n], turning_radius)
+                
         if task_type == 'JUMP':
             p_i = 0
             while p_i < len(valid_points):
@@ -363,7 +493,6 @@ else:
                             navigate(valid_points[i + 2]) if i + 2 < len(valid_points) else navigate(valid_points[-1])
                             p_i = i + 3
                             continue
-                        navigate(valid_points[int(i - (4 * turning_radius + 4))])
                         navigate(valid_points[int(i - (4 * turning_radius))])
                         dubins_navigate([weed[0], weed[1], rad_n], turning_radius)
                         dubins_navigate([valid_points[int(i + (4 * turning_radius))][0], valid_points[int(i + (4 * turning_radius))][1], rad_n],
@@ -418,7 +547,5 @@ else:
                 y_offset = y_offset + sight_width / 2 + agent_width / 2
         else:
             y_offset += agent_width
-
-
-
+save_data_to_csv(save_path, weed_dist, random_seed, map_id, 0, cover_90, cover_95, cover_98, cover, dist_list)
 print('verified')

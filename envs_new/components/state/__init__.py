@@ -1,7 +1,7 @@
-"""
-State management module.
+"""State management module.
+Provides state variable tracking and environment state management.
 """
 
-from envs_new.components.state.environment_state import EnvironmentState, StateTracker
+from envs_new.components.state.environment_state import StateVariable, EnvironmentState, StateTracker
 
-__all__ = ['EnvironmentState', 'StateTracker']
+__all__ = ['StateVariable', 'EnvironmentState', 'StateTracker']

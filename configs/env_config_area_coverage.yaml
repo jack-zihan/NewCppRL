@@ -1,0 +1,22 @@
+env:
+  params:
+    action_type: continuous
+    id: Pasture-v4
+    map_dir: envs/maps/complex_field/farmland
+    noise_direction: null
+    noise_position: null
+    noise_weed: null
+    num_obstacles_range: !!python/tuple
+    - 0
+    - 0
+    state_downsize: !!python/tuple
+    - 128
+    - 128
+    state_size: !!python/tuple
+    - 128
+    - 128
+    use_apf: false
+    use_box_boundary: true
+    use_global_obs: false
+    use_sgcnn: false
+    use_traj: true

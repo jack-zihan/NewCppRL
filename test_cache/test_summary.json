@@ -1,0 +1,49 @@
+{
+  "timestamp": "2025-08-10T05:53:52.190421",
+  "algorithms": {
+    "BCP": {
+      "42": {
+        "old": {
+          "coverage": 0.0,
+          "steps": 0,
+          "reward": 0.0,
+          "success": false
+        },
+        "new": {
+          "coverage": 0.0,
+          "steps": 0,
+          "reward": 0.0,
+          "success": false
+        },
+        "diff": {
+          "coverage": 0.0,
+          "steps": 0
+        }
+      },
+      "2": {
+        "old": {
+          "coverage": 0.0,
+          "steps": 0,
+          "reward": 0.0,
+          "success": false
+        },
+        "new": {
+          "coverage": 0.0,
+          "steps": 0,
+          "reward": 0.0,
+          "success": false
+        },
+        "diff": {
+          "coverage": 0.0,
+          "steps": 0
+        }
+      }
+    }
+  },
+  "statistics": {
+    "total_tests": 2,
+    "successful_tests": 0,
+    "success_rate": 0.0,
+    "avg_coverage_diff": 0
+  }
+}

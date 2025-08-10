@@ -1,0 +1,9 @@
+benchmark:
+  algorithms:
+    SNAKE:
+      enabled: true
+  scenarios:
+    difficulties:
+    - medium
+    seeds:
+    - 42

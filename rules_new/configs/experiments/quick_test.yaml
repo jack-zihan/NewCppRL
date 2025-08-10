@@ -1,0 +1,50 @@
+# 快速测试实验配置
+# 用于验证系统功能，使用较少种子和简化设置
+
+experiment:
+  name: "quick_test"
+  description: "快速测试新系统功能"
+  
+# 实验参数（简化版）
+parameters:
+  seeds: [42]  # 只测试一个种子
+  difficulties: ["easy"] 
+  weed_distributions: ["gaussian"]
+  noise_levels: ["no_noise"]
+  
+# 算法配置（只启用少量算法进行测试）
+algorithms:
+  # 传统算法测试
+  - name: "JUMP"
+    config_path: "algorithms/jump.yaml"
+    enabled: true
+  - name: "SNAKE"  
+    config_path: "algorithms/snake.yaml"
+    enabled: true
+    
+  # 神经网络模型测试（只启用一个）
+  - name: "NN_baseline"
+    model_path: "ckpt/sac_cont/2024-09-09_01-16-14_tanhnorm_loc/sac_baseline_continuous_t[01100]_r[2570.25=2509.63~2623.36] - 副本.pt"
+    device: "cpu"
+    enabled: true
+
+# 环境配置（仅使用EnvironmentConfig支持的参数）
+environment_overrides:
+  use_apf: true
+  use_box_boundary: true
+  use_traj: false  # 简化配置以加快测试
+  use_mist: false  # 简化配置
+  obs_use_mist: false  # 简化配置
+  use_global_features: false  # 简化配置以加快测试
+  use_multiscale: false  # 简化配置
+
+# 结果输出配置
+output:
+  base_dir: "logs"
+  csv_format: true
+  include_trajectory: false
+  metrics:
+    - total_coverage
+    - path_length
+    - total_reward
+    - total_steps

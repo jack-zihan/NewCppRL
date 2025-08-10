@@ -6,7 +6,7 @@ from cpu_apf import cpu_apf_bool  # noqa
 from gymnasium.wrappers import HumanRendering
 
 from envs.cpp_env_base_copy import CppEnvBase
-from envs.components.utils import total_variation_mat
+from envs.utils import total_variation_mat
 
 
 class CppEnv(CppEnvBase):

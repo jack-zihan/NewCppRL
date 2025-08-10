@@ -2,6 +2,6 @@
 Rendering module.
 """
 
-from envs_new.components.render.render_manager import MapRenderer, FirstPersonRenderer, RenderManager
+from envs_new.components.render.renderer import Renderer
 
-__all__ = ['MapRenderer', 'FirstPersonRenderer', 'RenderManager']
+__all__ = ['Renderer']

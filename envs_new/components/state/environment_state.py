@@ -1,256 +1,182 @@
-"""
-State management for the mowing robot environment.
-Provides encapsulated state tracking and change detection.
+"""Environment state management for the mowing robot.
+Provides encapsulated state tracking with dynamic state variable support.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Any, Tuple, Optional
-import numpy as np
+from collections import deque
+from typing import Dict, List, Tuple, TypeVar, Generic, Optional, Any
 
 
-@dataclass
+T = TypeVar('T')
+class StateVariable(Generic[T]):
+    """可配置历史追踪的状态变量"""
+
+    def __init__(self, name: str, history_length: int = 2, initial_value: T = None):
+        self._name = name
+        self._history: deque[T] = deque(maxlen=history_length)
+        if initial_value is not None:
+            self._history.append(initial_value)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def current(self) -> Optional[T]:
+        return self._history[-1] if self._history else None
+
+    @property
+    def last(self) -> Optional[T]:
+        return self._history[-2] if len(self._history) > 1 else None
+
+    @property
+    def history(self) -> deque[T]:
+        return self._history
+
+    def change(self, steps_back: int = 1) -> Any:
+        """
+        计算从过去到当前值的变化量。
+        
+        支持数值类型（返回 current - past）和元组类型（返回逐元素差值）。
+        非数值类型返回 None。
+        """
+        if len(self._history) <= steps_back:
+            return 0
+
+        current_val = self.current
+        past_val = self._history[-(steps_back + 1)]
+
+        # Handle numeric types (int, float)
+        if isinstance(current_val, (int, float)) and isinstance(past_val, (int, float)):
+            return current_val - past_val
+
+        # Handle tuple types with numeric elements
+        if isinstance(current_val, tuple) and isinstance(past_val, tuple):
+            if all(isinstance(x, (int, float)) for x in current_val + past_val):
+                return tuple(c - p for c, p in zip(current_val, past_val))
+
+        return None
+
+    def update(self, value: T) -> None:
+        self._history.append(value)
+
+    def reset(self, initial_value: T = None) -> None:
+        self._history.clear()
+        if initial_value is not None:
+            self._history.append(initial_value)
+
+    def __len__(self) -> int:
+        return len(self._history)
+
+    def __repr__(self) -> str:
+        return f"StateVariable(name='{self._name}', current={self.current})"
+
 class EnvironmentState:
-    """Encapsulates the complete state of the mowing environment."""
+    """环境状态容器，支持动态变量管理"""
     
-    # Map dimensions
-    dimensions: Tuple[int, int] = (0, 0)  # (width, height)
-    
-    # Episode tracking
-    current_step: int = 0
-    max_steps: int = 3000
-    
-    # Frontier state
-    frontier_area: int = 0
-    frontier_variation: int = 0
-    
-    # Weed state  
-    weed_count: int = 0
-    total_weed_count: int = 0
-    
-    # Agent state
-    agent_position: Tuple[int, int] = (0, 0)
-    agent_steer: float = 0.0
-    
-    # Environment flags
-    crashed: bool = False
-    finished: bool = False
-    timeout: bool = False
-    
-    # Previous state for change tracking
-    _previous_frontier_area: int = 0
-    _previous_frontier_variation: int = 0
-    _previous_weed_count: int = 0
-    _previous_agent_position: Tuple[int, int] = (0, 0)
-    _previous_agent_steer: float = 0.0
-    
-    def __post_init__(self):
-        """Initialize previous states to current values."""
-        self._previous_frontier_area = self.frontier_area
-        self._previous_frontier_variation = self.frontier_variation
-        self._previous_weed_count = self.weed_count
-        self._previous_agent_position = self.agent_position
-        self._previous_agent_steer = self.agent_steer
-    
-    def update_frontier(self, area: int, variation: int) -> None:
-        """Update frontier state and track changes."""
-        self._previous_frontier_area = self.frontier_area
-        self._previous_frontier_variation = self.frontier_variation
-        self.frontier_area = area
-        self.frontier_variation = variation
-    
-    def update_weed_count(self, count: int) -> None:
-        """Update weed count and track changes."""
-        self._previous_weed_count = self.weed_count
-        self.weed_count = count
-    
-    def update_agent(self, position: Tuple[int, int], steer: float) -> None:
-        """Update agent state and track changes."""
-        self._previous_agent_position = self.agent_position
-        self._previous_agent_steer = self.agent_steer
-        self.agent_position = position
-        self.agent_steer = steer
-    
-    def update_flags(self, crashed: bool, finished: bool, timeout: bool = None) -> None:
-        """Update environment status flags."""
-        self.crashed = crashed
-        self.finished = finished
-        if timeout is not None:
-            self.timeout = timeout
-    
-    def step(self) -> None:
-        """Increment step counter and update timeout status."""
-        self.current_step += 1
-        self.timeout = self.current_step >= self.max_steps
-    
-    def reset(self, dimensions: Tuple[int, int], total_weed_count: int, 
-              max_steps: int = 3000) -> None:
-        """Reset state for new episode."""
-        self.dimensions = dimensions
-        self.total_weed_count = total_weed_count
-        self.max_steps = max_steps
-        self.current_step = 0
+    def __init__(self):
+        self._state_infos: Dict[str, StateVariable] = {}
+        self._static_info: Dict[str, Any] = {}  # 非序列静态信息
         
-        # Reset state values
-        self.frontier_area = 0
-        self.frontier_variation = 0
-        self.weed_count = total_weed_count
-        self.agent_position = (0, 0)
-        self.agent_steer = 0.0
+        # 核心静态属性，支持直接访问以保持向后兼容
+        self.dimensions: Tuple[int, int] = (0, 0)
+        self.total_weed_count: int = 0
+        self.total_frontier_area: int = 0
+        self.max_steps: int = 300000
+    
+    def set_static_info(self, key: str, value: Any) -> None:
+        self._static_info[key] = value
         
-        # Reset flags
-        self.crashed = False
-        self.finished = False
-        self.timeout = False
+        # 为核心属性设置实例属性以便直接访问
+        if key in ['dimensions', 'total_weed_count', 'total_frontier_area', 'max_steps']:
+            setattr(self, key, value)
+    
+    def get_static_info(self, key: str, default: Any = None) -> Any:
+        return self._static_info.get(key, default)
+    
+    def add_state_info(self, name: str, history_length: int = 2, initial_value: Any = None) -> StateVariable:
+        state_var = StateVariable(name, history_length, initial_value)
+        self._state_infos[name] = state_var
+        return state_var
+    
+    def update_state(self, **updates) -> None:
+        for key, value in updates.items():
+            if key in self._state_infos:
+                self._state_infos[key].update(value)
+    
+    def get_info(self, name: str) -> Optional[StateVariable]:
+        return self._state_infos.get(name)
+    
+    def __getattr__(self, name: str) -> Any:
+        """统一访问接口：优先访问序列状态，然后访问静态信息"""
+        if name in self._state_infos:
+            return self._state_infos[name].current
+        elif name in self._static_info:
+            return self._static_info[name]
         
-        # Reset previous values
-        self._previous_frontier_area = 0
-        self._previous_frontier_variation = 0
-        self._previous_weed_count = total_weed_count
-        self._previous_agent_position = (0, 0)
-        self._previous_agent_steer = 0.0
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
     
-    # Properties for change tracking
-    @property
-    def frontier_area_change(self) -> int:
-        """Change in frontier area since last update."""
-        return self._previous_frontier_area - self.frontier_area
-    
-    @property
-    def frontier_variation_change(self) -> int:
-        """Change in frontier variation since last update."""
-        return self._previous_frontier_variation - self.frontier_variation
-    
-    @property
-    def weed_count_change(self) -> int:
-        """Change in weed count since last update."""
-        return self._previous_weed_count - self.weed_count
-    
-    @property
-    def agent_steer_change(self) -> float:
-        """Change in agent steering since last update."""
-        return self.agent_steer - self._previous_agent_steer
-    
-    @property
-    def previous_agent_position(self) -> Tuple[int, int]:
-        """Previous agent position."""
-        return self._previous_agent_position
-    
-    @property
-    def previous_agent_steer(self) -> float:
-        """Previous agent steering."""
-        return self._previous_agent_steer
+    def reset(self, dimensions: Tuple[int, int], total_weed_count: int, max_steps: int = 3000) -> None:
+        """重置环境状态"""
+        self.set_static_info('dimensions', dimensions)
+        self.set_static_info('total_weed_count', total_weed_count)
+        self.set_static_info('max_steps', max_steps)
     
     @property
     def is_done(self) -> bool:
-        """Check if episode is done."""
-        return self.crashed or self.finished or self.timeout
+        crashed = self._state_infos.get('crashed', StateVariable('crashed', 1, False)).current
+        finished = self._state_infos.get('finished', StateVariable('finished', 1, False)).current
+        timeout = self._state_infos.get('timeout', StateVariable('timeout', 1, False)).current
+        return bool(crashed or finished or timeout)
     
     @property
-    def weed_completion_ratio(self) -> float:
-        """Ratio of weeds removed (0.0 = none removed, 1.0 = all removed)."""
+    def weed_completion_ratio(self) -> float: #TODO: 这个功能要考虑有没有这个组件
+        """杂草清除完成率：0.0（未清除）到 1.0（全部清除）"""
         if self.total_weed_count == 0:
             return 1.0
-        return 1.0 - (self.weed_count / self.total_weed_count)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert state to dictionary for backward compatibility."""
-        return {
-            'dimensions': self.dimensions,
-            'current_step': self.current_step,
-            'frontier_area': self.frontier_area,
-            'prev_frontier_area': self._previous_frontier_area,
-            'frontier_variation': self.frontier_variation,
-            'prev_frontier_variation': self._previous_frontier_variation,
-            'weed_count': self.weed_count,
-            'prev_weed_count': self._previous_weed_count,
-            'discrete_pos': self.agent_position,
-            'prev_discrete_pos': self._previous_agent_position,
-            'current_steer': self.agent_steer,
-            'prev_steer': self._previous_agent_steer,
-            'crashed': self.crashed,
-            'finished': self.finished,
-            'timeout': self.timeout
-        }
-    
-    @classmethod
-    def from_dict(cls, state_dict: Dict[str, Any]) -> 'EnvironmentState':
-        """Create state from dictionary for backward compatibility."""
-        state = cls()
-        state.dimensions = state_dict.get('dimensions', (0, 0))
-        state.current_step = state_dict.get('current_step', 0)
-        state.frontier_area = state_dict.get('frontier_area', 0)
-        state._previous_frontier_area = state_dict.get('prev_frontier_area', 0)
-        state.frontier_variation = state_dict.get('frontier_variation', 0)
-        state._previous_frontier_variation = state_dict.get('prev_frontier_variation', 0)
-        state.weed_count = state_dict.get('weed_count', 0)
-        state._previous_weed_count = state_dict.get('prev_weed_count', 0)
-        state.agent_position = state_dict.get('discrete_pos', (0, 0))
-        state._previous_agent_position = state_dict.get('prev_discrete_pos', (0, 0))
-        state.agent_steer = state_dict.get('current_steer', 0.0)
-        state._previous_agent_steer = state_dict.get('prev_steer', 0.0)
-        state.crashed = state_dict.get('crashed', False)
-        state.finished = state_dict.get('finished', False)
-        state.timeout = state_dict.get('timeout', False)
-        return state
+        current_weed_count = self._state_infos.get('weed_count', StateVariable('weed_count', 1, 0)).current or 0
+        return 1.0 - (current_weed_count / self.total_weed_count)
 
 
-@dataclass
 class StateTracker:
-    """Tracks state changes and provides analytics."""
-    
-    state_history: List[EnvironmentState] = field(default_factory=list)
-    max_history_length: int = 1000
-    
-    def add_state(self, state: EnvironmentState) -> None:
-        """Add a state to the history."""
-        # Create a copy to avoid reference issues
-        state_copy = EnvironmentState(**state.__dict__)
-        self.state_history.append(state_copy)
-        
-        # Maintain maximum history length
-        if len(self.state_history) > self.max_history_length:
-            self.state_history.pop(0)
-    
-    def get_recent_states(self, n: int = 10) -> List[EnvironmentState]:
-        """Get the most recent n states."""
-        return self.state_history[-n:]
-    
-    def get_state_at_step(self, step: int) -> Optional[EnvironmentState]:
-        """Get state at a specific step."""
-        for state in self.state_history:
-            if state.current_step == step:
-                return state
-        return None
-    
+    """长期状态历史追踪器，用于分析和可视化。"""
+
+    def __init__(self, long_history_length: int = 1000):
+        self.long_history_length = long_history_length
+        self.long_term_vars: Dict[str, StateVariable] = {}
+        self._is_setup = False
+
+    def setup_long_term_tracking(self, env_state: EnvironmentState, tracked_vars: List[str] = None) -> None:
+        """为指定状态变量初始化长期追踪。"""
+        if tracked_vars is None:
+            tracked_vars = ['frontier_area', 'weed_count', 'agent_position', 'trajectory_length', 'current_step']
+
+        for var_name in tracked_vars:
+            state_var = env_state.get_info(var_name)
+            if state_var and state_var.current is not None:
+                self.long_term_vars[var_name] = StateVariable(
+                    f"long_term_{var_name}",
+                    self.long_history_length,
+                    state_var.current
+                )
+
+        self._is_setup = True
+
+    def record_step(self, env_state: EnvironmentState) -> None:
+        if not self._is_setup:
+            self.setup_long_term_tracking(env_state)
+
+        for name, long_var in self.long_term_vars.items():
+            state_var = env_state.get_info(name)
+            if state_var and state_var.current is not None:
+                long_var.update(state_var.current)
+
+    def get_recent_history(self, var_name: str, n: int = 10) -> List[Any]:
+        if var_name in self.long_term_vars:
+            history = list(self.long_term_vars[var_name].history)
+            return history[-n:] if len(history) >= n else history
+        return []
+
     def clear_history(self) -> None:
-        """Clear state history."""
-        self.state_history.clear()
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get statistics about state changes."""
-        if not self.state_history:
-            return {}
-        
-        total_steps = len(self.state_history)
-        final_state = self.state_history[-1]
-        
-        # Calculate total changes
-        total_frontier_reduction = 0
-        total_weed_removal = 0
-        
-        for state in self.state_history:
-            total_frontier_reduction += state.frontier_area_change
-            total_weed_removal += state.weed_count_change
-        
-        return {
-            'total_steps': total_steps,
-            'final_crashed': final_state.crashed,
-            'final_finished': final_state.finished,
-            'final_timeout': final_state.timeout,
-            'total_frontier_reduction': total_frontier_reduction,
-            'total_weed_removal': total_weed_removal,
-            'weed_completion_ratio': final_state.weed_completion_ratio,
-            'final_frontier_area': final_state.frontier_area,
-            'final_weed_count': final_state.weed_count
-        }
+        self.long_term_vars.clear()
+        self._is_setup = False

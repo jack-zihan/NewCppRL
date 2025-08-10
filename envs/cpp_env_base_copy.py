@@ -12,7 +12,7 @@ from pathlib import Path
 from cpu_apf import cpu_apf_bool  # noqa
 from gymnasium.error import DependencyNotInstalled
 from typing import Optional, Tuple, Union, Any, Sequence
-from envs.components.utils import (
+from envs.utils import (
     total_variation,
     total_variation_mat,
     get_map_pasture_larger,
@@ -418,7 +418,7 @@ class CppEnvBase(gym.Env):
             else:
                 obs = self.get_sgcnn_obs(obs, None, None)
         return {'observation': obs,
-                'vector': self.agent.last_steer / self.w_range.max,
+                'vector': np.array([self.agent.last_steer / self.w_range.max], dtype=np.float32),
                 'weed_ratio': 1 - self.weed_num_t / self.weed_num}
 
     def get_sgcnn_obs(self, obs: np.ndarray,

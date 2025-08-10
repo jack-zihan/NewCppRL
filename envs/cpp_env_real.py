@@ -4,7 +4,7 @@ import numpy as np
 import gymnasium as gym
 
 from envs.cpp_env_v2 import CppEnv
-from envs.components.utils import RealAgent
+from envs.utils import RealAgent
 from gymnasium.wrappers import HumanRendering
 
 class CppEnvReal(CppEnv):

@@ -51,20 +51,6 @@ class EnvironmentFactory:
         env_class = cls._env_registry[version]
         return env_class(render_mode=render_mode, **kwargs)
     
-    @classmethod
-    def create_simple_env(cls, render_mode: Optional[str] = None, **kwargs) -> CppEnvV1:
-        """Create simple environment without mist (v1)."""
-        return cls.create('v1', render_mode=render_mode, **kwargs)
-    
-    @classmethod 
-    def create_apf_env(cls, render_mode: Optional[str] = None, **kwargs) -> CppEnvV2:
-        """Create APF-based environment (v2)."""
-        return cls.create('v2', render_mode=render_mode, **kwargs)
-    
-    @classmethod
-    def create_exploration_env(cls, render_mode: Optional[str] = None, **kwargs) -> CppEnvV3:
-        """Create exploration environment with mist (v3)."""
-        return cls.create('v3', render_mode=render_mode, **kwargs)
     
     @classmethod
     def list_available_versions(cls) -> list[str]:
@@ -83,13 +69,13 @@ class EnvironmentFactory:
         cls._env_registry[name] = env_class
 
 
-# Convenience functions for direct usage
+# Convenience function for direct usage
 def make_env(version: str = 'base', render_mode: Optional[str] = None, **kwargs) -> CppEnvBase:
     """
     Create environment using factory.
     
     Args:
-        version: Environment version
+        version: Environment version ('base', 'v1', 'v2', 'v3', 'simple', 'apf', 'exploration')
         render_mode: Rendering mode  
         **kwargs: Additional configuration
         
@@ -97,18 +83,3 @@ def make_env(version: str = 'base', render_mode: Optional[str] = None, **kwargs)
         Environment instance
     """
     return EnvironmentFactory.create(version, render_mode, **kwargs)
-
-
-def make_simple_env(render_mode: Optional[str] = None, **kwargs) -> CppEnvV1:
-    """Create simple environment (v1)."""
-    return EnvironmentFactory.create_simple_env(render_mode, **kwargs)
-
-
-def make_apf_env(render_mode: Optional[str] = None, **kwargs) -> CppEnvV2:
-    """Create APF environment (v2)."""
-    return EnvironmentFactory.create_apf_env(render_mode, **kwargs)
-
-
-def make_exploration_env(render_mode: Optional[str] = None, **kwargs) -> CppEnvV3:
-    """Create exploration environment (v3)."""
-    return EnvironmentFactory.create_exploration_env(render_mode, **kwargs)

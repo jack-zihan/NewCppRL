@@ -5,7 +5,7 @@ Based on the new modular architecture.
 from __future__ import annotations
 
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from gymnasium.wrappers import HumanRendering
 
 from envs_new.cpp_env_base import CppEnvBase
@@ -20,100 +20,68 @@ class CppEnv(CppEnvBase):
     
     def __init__(self, render_mode=None, **kwargs):
         """Initialize v1 environment with specific configuration."""
-        # Create configuration for v1 (no mist)
-        config_overrides = {
-            'map_config': {
-                'use_mist': False,  # Key difference: no mist
-                'use_traj': True
-            },
-            'observation_config': {
-                'use_multiscale': False,  # Simple first-person observation
-                'state_size': (128, 128),
-                'state_downsize': (128, 128),
-                'use_global_features': False
-            },
-            'reward_config': {
-                'coefficients': {
-                    'base_penalty': -0.1,
-                    'weed_removal_coef': 20.0,
-                    'frontier_coverage_coef': 0.5,
-                    'turn_total_coef': 0.0,
-                    'turn_gap_coef': -0.5,
-                    'turn_direction_coef': -0.30,
-                    'turn_self_coef': 0.25,
-                    'frontier_total_coef': 0.125,
-                    'frontier_tv_coef': 0.5,
-                    'collision_penalty': -399.0,
-                    'completion_bonus': 500.0
-                }
+        # v1特定默认值：无mist，无APF
+        v1_defaults = {
+            'use_mist': False,
+            'use_apf': False,
+            'obs_use_mist': False,
+            'use_traj': True,
+            # v1特定的奖励系数
+            'reward_frontier_coverage_coef': 0.5,
+            'reward_frontier_total_coef': 0.125,
+        }
+        
+        # 合并用户参数，用户参数优先
+        final_kwargs = {**v1_defaults, **kwargs}
+        super().__init__(render_mode=render_mode, **final_kwargs)
+    
+    def _get_observation_maps(self) -> Dict[str, Dict[str, Any]]:
+        """
+        获取v1环境的观察地图。
+        v1使用简单的地图观察，不包含mist。
+        
+        Returns:
+            包含4个地图的字典：frontier, obstacle, weed, trajectory
+        """
+        # 基础地图，注意obstacle的pad值为1.0
+        maps = {
+            'frontier': {'map': self.maps_dict['field_frontier'], 'pad': 0.0},
+            'obstacle': {'map': self.maps_dict['obstacle'], 'pad': 1.0},
+            'weed': {
+                'map': np.logical_and(
+                    self.maps_dict['weed'], 
+                    np.logical_not(self.maps_dict['field_frontier'])
+                ),  # 只包含非frontier区域的杂草
+                'pad': 0.0
             }
         }
         
-        # Merge with user provided kwargs (excluding render_mode)
-        for key, value in kwargs.items():
-            if key != 'render_mode':
-                if key in config_overrides:
-                    if isinstance(value, dict):
-                        config_overrides[key].update(value)
-                    else:
-                        config_overrides[key] = value
-                else:
-                    config_overrides[key] = value
+        # 添加轨迹地图
+        if 'trajectory' in self.maps_dict:
+            maps['trajectory'] = {'map': self.maps_dict['trajectory'], 'pad': 0.0}
+        else:
+            maps['trajectory'] = {'map': np.zeros_like(self.maps_dict['field_frontier']), 'pad': 0.0}
         
-        config = EnvironmentConfig.from_dict(config_overrides)
-        super().__init__(config=config, render_mode=render_mode)
-    
-    def _create_simple_observation_maps(self, maps_dict: Dict[str, np.ndarray]) -> np.ndarray:
-        """
-        Create simple observation maps (v1 style).
-        
-        Args:
-            maps_dict: Dictionary containing all map types
-            
-        Returns:
-            Stacked maps array with shape (H, W, C)
-        """
-        maps_list = [
-            maps_dict['map_frontier'],
-            maps_dict['map_obstacle'],
-            np.logical_and(maps_dict['map_weed'], 
-                          np.logical_not(maps_dict['map_frontier'])),  # Only weeds in non-frontier areas
-            maps_dict['map_trajectory'] if 'map_trajectory' in maps_dict else np.zeros_like(maps_dict['map_frontier'])
-        ]
-        
-        return np.stack(maps_list, axis=-1)
+        return maps
 
 
-def create_cpp_env_v1(**kwargs) -> CppEnv:
-    """Create CppEnv v1 with default parameters."""
-    return CppEnv(**kwargs)
 
 
 if __name__ == "__main__":
     if_render = True
     episodes = 3
-    
     env = CppEnv(
-        render_mode='rgb_array' if if_render else None,
-        state_pixels=False,
+        render_mode='rgb_array' if if_render else None,  # v1默认使用全局视图
     )
-    
-    if if_render:
-        env = HumanRendering(env)
+    env: CppEnv = HumanRendering(env)
 
-    for episode in range(episodes):
-        print(f"Episode {episode + 1}")
-        obs, info = env.reset(seed=42 + episode)
+    for _ in range(episodes):
+        reset_state = {}
+        obs, info = env.reset(**reset_state)
         done = False
-        step_count = 0
-        
-        while not done and step_count < 1000:
+        while not done:
             action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-            step_count += 1
-            
-            if step_count % 100 == 0:
-                print(f"  Step {step_count}, Reward: {reward:.3f}")
-        
-        print(f"  Episode finished in {step_count} steps")
+            obs, reward, done, _, info = env.step(action)
+            print(reward)
+            if if_render:
+                env.render()

@@ -6,66 +6,86 @@ from __future__ import annotations
 
 import numpy as np
 from typing import Tuple, Union
-from envs_new.components.config.environment_config import ActionConfig
+from envs_new.components.config.environment_config import EnvironmentConfig
 
 
 class ActionProcessor:
-    """Processes and converts between different action representations."""
+    """
+    Processes and converts between different action representations.
     
-    def __init__(self, config: ActionConfig):
-        """
-        Initialize action processor.
-        
-        Args:
-            config: Action configuration containing ranges and discretization
-        """
+    Key concepts:
+    - Discrete actions: Single integer index [0, nvec[0]*nvec[1]-1]
+    - Multi-discrete actions: Tuple of (acceleration_index, steering_index)
+    - Continuous actions: Tuple of (linear_velocity, angular_velocity)
+    - All conversions preserve exact mathematical relationships
+    """
+    
+    def __init__(self, config: EnvironmentConfig):
         self.config = config
         self.v_range = config.v_range
         self.w_range = config.w_range
-        self.nvec = config.nvec
+        self.nvec = config.action_nvec
+        
+        # 预计算查找表以避免运行时除法运算
+        self._linear_velocity_table = [
+            self.v_range.min + (i + 1) / self.nvec[0] * self.v_range.mode
+            for i in range(self.nvec[0])
+        ]
+        self._angular_velocity_table = [
+            self.w_range.min + i / (self.nvec[1] - 1) * self.w_range.mode
+            for i in range(self.nvec[1])
+        ]
     
     def parse_discrete_action(self, action: int) -> Tuple[float, float]:
-        """
-        Convert discrete action to continuous velocities.
-        
-        Args:
-            action: Discrete action index
-            
-        Returns:
-            Tuple of (linear_velocity, angular_velocity)
-            
-        Raises:
-            ValueError: If action index is out of range
-        """
         max_actions = self.nvec[0] * self.nvec[1]
         if not (0 <= action < max_actions):
             raise ValueError(f"Action {action} out of range [0, {max_actions-1}]")
         
-        # Decode action
+        # Decode single index into 2D grid coordinates
         acc_index = action // self.nvec[1]  # [0, nvec[0]-1]
         steer_index = action % self.nvec[1]  # [0, nvec[1]-1]
         
-        # Convert to velocities
-        linear_velocity = (self.v_range.min + 
-                          (acc_index + 1) / self.nvec[0] * self.v_range.mode)
-        angular_velocity = (self.w_range.min + 
-                           steer_index / (self.nvec[1] - 1) * self.w_range.mode)
+        return self._indices_to_velocities(acc_index, steer_index)
+    
+    def _indices_to_velocities(self, acc_index: int, steer_index: int) -> Tuple[float, float]:
+        """
+        Core index-to-velocity conversion using precomputed lookup tables.
         
-        return linear_velocity, angular_velocity
+        Optimized version that avoids runtime division operations.
+        """
+        return self._linear_velocity_table[acc_index], self._angular_velocity_table[steer_index]
+    
+    def _velocities_to_indices(self, linear_velocity: float, angular_velocity: float) -> Tuple[int, int]:
+        """
+        Core velocity-to-index conversion (inverse of _indices_to_velocities).
+        Preserves exact mathematical relationship and handles boundary conditions.
+        """
+        # Convert velocities to normalized ratios [0, 1]
+        acc_ratio = (linear_velocity - self.v_range.min) / self.v_range.mode
+        steer_ratio = (angular_velocity - self.w_range.min) / self.w_range.mode
+        
+        # Convert ratios to indices with boundary clamping
+        acc_index = max(0, min(int(acc_ratio * self.nvec[0]) - 1, self.nvec[0] - 1))
+        steer_index = max(0, min(int(steer_ratio * (self.nvec[1] - 1)), self.nvec[1] - 1))
+        
+        return acc_index, steer_index
+    
+    def _validate_and_convert_action(self, action, action_type: str):
+        """Validate action type and format, convert to standard representation."""
+        if action_type == "discrete":
+            if not isinstance(action, (int, np.integer)):
+                raise ValueError(f"Expected int for discrete action, got {type(action)}")
+            return int(action)
+        
+        elif action_type in ["multi_discrete", "continuous"]:
+            if not (isinstance(action, (tuple, list)) and len(action) == 2):
+                raise ValueError(f"Expected tuple of length 2 for {action_type} action, got {action}")
+            return tuple(action)
+        
+        else:
+            raise ValueError(f"Unsupported action type: {action_type}")
     
     def parse_multi_discrete_action(self, action: Tuple[int, int]) -> Tuple[float, float]:
-        """
-        Convert multi-discrete action to continuous velocities.
-        
-        Args:
-            action: Tuple of (acceleration_index, steering_index)
-            
-        Returns:
-            Tuple of (linear_velocity, angular_velocity)
-            
-        Raises:
-            ValueError: If action indices are out of range
-        """
         acc_index, steer_index = action
         
         if not (0 <= acc_index < self.nvec[0]):
@@ -73,27 +93,9 @@ class ActionProcessor:
         if not (0 <= steer_index < self.nvec[1]):
             raise ValueError(f"Steering index {steer_index} out of range [0, {self.nvec[1]-1}]")
         
-        # Convert to velocities
-        linear_velocity = (self.v_range.min + 
-                          (acc_index + 1) / self.nvec[0] * self.v_range.mode)
-        angular_velocity = (self.w_range.min + 
-                           steer_index / (self.nvec[1] - 1) * self.w_range.mode)
-        
-        return linear_velocity, angular_velocity
+        return self._indices_to_velocities(acc_index, steer_index)
     
     def parse_continuous_action(self, action: Tuple[float, float]) -> Tuple[float, float]:
-        """
-        Validate and return continuous action.
-        
-        Args:
-            action: Tuple of (linear_velocity, angular_velocity)
-            
-        Returns:
-            Validated tuple of (linear_velocity, angular_velocity)
-            
-        Raises:
-            ValueError: If velocities are out of valid range
-        """
         linear_velocity, angular_velocity = action
         
         if not (self.v_range.min <= linear_velocity <= self.v_range.max):
@@ -108,87 +110,33 @@ class ActionProcessor:
     
     def parse_action(self, action: Union[int, Tuple[int, int], Tuple[float, float]], 
                     action_type: str) -> Tuple[float, float]:
-        """
-        Parse action based on type.
+        """Unified action parsing interface for all action types."""
+        validated_action = self._validate_and_convert_action(action, action_type)
         
-        Args:
-            action: Action in any supported format
-            action_type: Type of action ("discrete", "multi_discrete", "continuous")
-            
-        Returns:
-            Tuple of (linear_velocity, angular_velocity)
-            
-        Raises:
-            ValueError: If action type is unsupported or action is invalid
-        """
         if action_type == "discrete":
-            if not isinstance(action, (int, np.integer)):
-                raise ValueError(f"Expected int for discrete action, got {type(action)}")
-            return self.parse_discrete_action(int(action))
-        
+            return self.parse_discrete_action(validated_action)
         elif action_type == "multi_discrete":
-            if not (isinstance(action, (tuple, list)) and len(action) == 2):
-                raise ValueError(f"Expected tuple of length 2 for multi_discrete action, got {action}")
-            return self.parse_multi_discrete_action(tuple(action))
-        
-        elif action_type == "continuous":
-            if not (isinstance(action, (tuple, list)) and len(action) == 2):
-                raise ValueError(f"Expected tuple of length 2 for continuous action, got {action}")
-            return self.parse_continuous_action(tuple(action))
-        
-        else:
-            raise ValueError(f"Unsupported action type: {action_type}")
+            return self.parse_multi_discrete_action(validated_action)
+        else:  # continuous
+            return self.parse_continuous_action(validated_action)
     
     def clip_action(self, linear_velocity: float, angular_velocity: float) -> Tuple[float, float]:
-        """
-        Clip velocities to valid ranges.
-        
-        Args:
-            linear_velocity: Linear velocity to clip
-            angular_velocity: Angular velocity to clip
-            
-        Returns:
-            Clipped velocities
-        """
         clipped_linear = max(self.v_range.min, min(linear_velocity, self.v_range.max))
         clipped_angular = max(self.w_range.min, min(angular_velocity, self.w_range.max))
-        
         return clipped_linear, clipped_angular
     
     def action_to_discrete(self, linear_velocity: float, angular_velocity: float) -> int:
-        """
-        Convert continuous velocities to discrete action index.
+        """Convert continuous velocities to discrete action index."""
+        # Ensure velocities are within valid bounds
+        linear_velocity, angular_velocity = self.clip_action(linear_velocity, angular_velocity)
         
-        Args:
-            linear_velocity: Linear velocity
-            angular_velocity: Angular velocity
-            
-        Returns:
-            Discrete action index
-        """
-        # Clip to valid ranges
-        linear_velocity = max(self.v_range.min, min(linear_velocity, self.v_range.max))
-        angular_velocity = max(self.w_range.min, min(angular_velocity, self.w_range.max))
-        
-        # Convert to indices
-        acc_ratio = (linear_velocity - self.v_range.min) / self.v_range.mode
-        acc_index = max(0, min(int(acc_ratio * self.nvec[0]) - 1, self.nvec[0] - 1))
-        
-        steer_ratio = (angular_velocity - self.w_range.min) / self.w_range.mode
-        steer_index = max(0, min(int(steer_ratio * (self.nvec[1] - 1)), self.nvec[1] - 1))
-        
+        # Convert to grid indices and encode as single integer
+        acc_index, steer_index = self._velocities_to_indices(linear_velocity, angular_velocity)
         return acc_index * self.nvec[1] + steer_index
     
     def get_action_bounds(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
-        """
-        Get action bounds for continuous actions.
-        
-        Returns:
-            Tuple of ((v_min, v_max), (w_min, w_max))
-        """
         return ((self.v_range.min, self.v_range.max), 
                 (self.w_range.min, self.w_range.max))
     
     def get_action_space_size(self) -> int:
-        """Get total number of discrete actions."""
         return self.nvec[0] * self.nvec[1]

@@ -5,7 +5,7 @@ Based on the new modular architecture.
 from __future__ import annotations
 
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from gymnasium.wrappers import HumanRendering
 
 from envs_new.cpp_env_base import CppEnvBase
@@ -20,220 +20,89 @@ class CppEnv(CppEnvBase):
     
     def __init__(self, render_mode=None, **kwargs):
         """Initialize v3 environment with mist exploration configuration."""
-        # Create configuration for v3 (with mist exploration)
-        config_overrides = {
-            'map_config': {
-                'use_mist': True,  # Key feature: mist system
-                'use_traj': True
-            },
-            'observation_config': {
-                'use_multiscale': False,
-                'state_size': (128, 128),
-                'state_downsize': (128, 128),
-                'use_global_features': False,
-                'position_noise': 0.1  # Add some noise for realism
-            },
-            'reward_config': {
-                'coefficients': {
-                    'base_penalty': -0.1,
-                    'weed_removal_coef': 20.0,
-                    'frontier_coverage_coef': 0.5,
-                    'turn_total_coef': 0.0,
-                    'turn_gap_coef': -0.5,
-                    'turn_direction_coef': -0.30,
-                    'turn_self_coef': 0.25,
-                    'frontier_total_coef': 0.125,
-                    'frontier_tv_coef': 0.5,
-                    'collision_penalty': -399.0,
-                    'completion_bonus': 500.0
-                }
-            },
-            'render_config': {
-                'render_mist': True,
-                'render_covered_weed': True,
-                'render_covered_farmland': True
+        # v3特定默认值：有mist，无APF
+        v3_defaults = {
+            'use_mist': True,
+            'use_apf': False,
+            'obs_use_mist': True,
+            'use_traj': True,
+            'render_mist': True,
+            'position_noise': 0.1,  # v3特有的噪声设置
+            # v3特定的奖励系数（与v1/v2相同的值）
+            'reward_frontier_coverage_coef': 0.5,
+            'reward_frontier_total_coef': 0.125,
+        }
+        
+        # 合并用户参数，用户参数优先
+        final_kwargs = {**v3_defaults, **kwargs}
+        super().__init__(render_mode=render_mode, **final_kwargs)
+        
+        self.use_traj = self.config.use_traj
+        self.noise_weed = self.config.weed_noise
+        
+        self.obs_mask = None
+    
+    def _get_observation_maps(self) -> Dict[str, Dict[str, Any]]:
+        """
+        获取v3环境的观察地图。
+        v3使用带mist的地图，具有探索机制。
+        
+        Returns:
+            包含4个地图的字典：frontier, mist_inv, obstacle, weed
+        """        
+        # 提取所需地图
+        map_frontier = self.maps_dict['field_frontier']
+        map_obstacle = self.maps_dict['obstacle'] 
+        map_weed = self.maps_dict['weed']
+        map_mist = self.maps_dict.get('mist', np.ones_like(map_frontier))  # 默认全部可见
+        
+        # 处理杂草噪声
+        if hasattr(self, 'noise_weed') and self.noise_weed and hasattr(self, 'np_random'):
+            if self.np_random.uniform() < self.noise_weed:
+                map_weed_ = self.maps_dict.get('weed_noisy', map_weed)
+            else:
+                map_weed_ = map_weed
+        else:
+            map_weed_ = map_weed
+        
+        # 创建观察地图字典，注意obstacle的pad值为1.0
+        obs_maps = {
+            'frontier': {'map': map_frontier, 'pad': 0.0},                    # 前沿区域
+            'mist_inv': {'map': np.logical_not(map_mist), 'pad': 0.0},       # 反转的mist（未探索区域）
+            'obstacle': {'map': map_obstacle, 'pad': 1.0},                    # 障碍物（边界视为障碍物）
+            'weed': {                                                          # 非前沿区域的杂草
+                'map': np.logical_and(map_weed_, np.logical_not(map_frontier)),
+                'pad': 0.0
             }
         }
         
-        # Merge with user provided kwargs (excluding render_mode)
-        for key, value in kwargs.items():
-            if key != 'render_mode':
-                if key in config_overrides:
-                    if isinstance(value, dict):
-                        config_overrides[key].update(value)
-                    else:
-                        config_overrides[key] = value
-                else:
-                    config_overrides[key] = value
+        # 存储mask列表
+        self.obs_mask = [0., 0., 1., 0.]  # 只有obstacle获得权重1.0
         
-        config = EnvironmentConfig.from_dict(config_overrides)
-        super().__init__(config=config, render_mode=render_mode)
-        
-        # Track explored areas for exploration rewards
-        self.explored_mist_areas = None
-    
-    def _create_mist_observation_maps(self, maps_dict: Dict[str, np.ndarray]) -> np.ndarray:
-        """
-        Create mist-aware observation maps (v3 style).
-        
-        Args:
-            maps_dict: Dictionary containing all map types
-            
-        Returns:
-            Stacked maps array with shape (H, W, C) with mist visibility applied
-        """
-        # Get noise-adjusted weed map if noise is enabled
-        map_weed = maps_dict['map_weed']
-        if (hasattr(self.config.observation_config, 'position_noise') and 
-            self.config.observation_config.position_noise > 0 and 
-            hasattr(self, 'np_random')):
-            if (self.np_random.uniform() < self.config.observation_config.position_noise and 
-                'map_weed_noisy' in maps_dict):
-                map_weed = maps_dict['map_weed_noisy']
-        
-        # Get mist map - only visible areas can be observed
-        map_mist = maps_dict.get('map_mist', np.ones_like(maps_dict['map_frontier']))
-        
-        maps_list = [
-            maps_dict['map_trajectory'],  # Trajectory first in v3
-            np.logical_not(map_mist),     # Mist visibility mask
-            maps_dict['map_obstacle'],    # Obstacles (only visible in explored areas)
-            np.logical_and(map_weed, np.logical_not(maps_dict['map_frontier'])),  # Weeds outside frontier
-        ]
-        
-        if self.config.map_config.use_traj:
-            maps_list.append(maps_dict['map_trajectory'])
-        
-        return np.stack(maps_list, axis=-1)
-    
-    def _calculate_exploration_reward(self, agent_pos: Tuple[float, float, float]) -> float:
-        """
-        Calculate reward for exploring new misted areas.
-        
-        Args:
-            agent_pos: Current agent position (x, y, direction)
-            
-        Returns:
-            Exploration reward
-        """
-        if 'map_mist' not in self.maps_dict:
-            return 0.0
-        
-        x, y = int(agent_pos[0]), int(agent_pos[1])
-        map_mist = self.maps_dict['map_mist']
-        
-        # Initialize explored areas map if needed
-        if self.explored_mist_areas is None:
-            self.explored_mist_areas = np.zeros_like(map_mist)
-        
-        # Check if current position was previously unexplored mist
-        if (0 <= y < map_mist.shape[0] and 
-            0 <= x < map_mist.shape[1] and
-            not map_mist[y, x] and  # Was misted
-            not self.explored_mist_areas[y, x]):  # Not previously explored
-            
-            # Mark as explored
-            self.explored_mist_areas[y, x] = 1
-            
-            # Give exploration reward (hardcoded weight for v3)
-            exploration_weight = 0.1
-            return exploration_weight
-        
-        return 0.0
-    
-    def step(self, action) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict]:
-        """Override step to include exploration rewards."""
-        # Call parent step
-        obs, reward, terminated, truncated, info = super().step(action)
-        
-        # Add exploration reward
-        if self.agent is not None:
-            exploration_reward = self._calculate_exploration_reward(
-                (self.agent.x, self.agent.y, self.agent.direction)
-            )
-            reward += exploration_reward
-            info['exploration_reward'] = exploration_reward
-        
-        return obs, reward, terminated, truncated, info
-    
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[Dict[str, np.ndarray], Dict]:
-        """Override reset to initialize exploration tracking."""
-        obs, info = super().reset(seed=seed, options=options)
-        
-        # Reset exploration tracking
-        self.explored_mist_areas = None
-        
-        return obs, info
-    
-    def render_map_with_mist_effect(self) -> Optional[np.ndarray]:
-        """
-        Render map with mist effect (darkened unexplored areas).
-        
-        Returns:
-            Rendered map with mist effect applied
-        """
-        if not hasattr(self, 'render_manager'):
-            return None
-        
-        # Get base rendered map
-        rendered_map = self.render_manager.render_complete_map(
-            self.maps_dict, self.agent, self.env_state
-        )
-        
-        if rendered_map is None or 'map_mist' not in self.maps_dict:
-            return rendered_map
-        
-        # Apply mist effect (darken misted areas)
-        map_mist = self.maps_dict['map_mist']
-        mist_mask = np.expand_dims(map_mist, axis=-1)  # Add channel dimension
-        
-        # Darken misted areas by 50%
-        rendered_map = np.where(
-            mist_mask,
-            rendered_map,
-            (rendered_map * 0.5).astype(np.uint8)
-        )
-        
-        return rendered_map
+        return obs_maps
 
 
-def create_cpp_env_v3(**kwargs) -> CppEnv:
-    """Create CppEnv v3 with default parameters."""
-    return CppEnv(**kwargs)
 
 
 if __name__ == "__main__":
     if_render = True
     episodes = 3
-    
     env = CppEnv(
-        render_mode='rgb_array' if if_render else None,
-        state_pixels=True,  # v3 typically uses pixel rendering
+        render_mode='rgb_array' if if_render else None,  # HumanRendering需要rgb_array
+        render_first_person=True,  # 控制渲染第一人称视角
     )
-    
-    if if_render:
-        env = HumanRendering(env)
+    env: CppEnv = HumanRendering(env)
 
-    for episode in range(episodes):
-        print(f"Episode {episode + 1}")
-        obs, info = env.reset(seed=42 + episode)
+    for _ in range(episodes):
+        obs, info = env.reset(seed=120, options={
+            'weed_dist': 'gaussian',
+            "weed_num": 100
+        })
+        env.action_space.seed(66)
         done = False
-        step_count = 0
-        total_reward = 0
-        total_exploration_reward = 0
-        
-        while not done and step_count < 1000:
+        while not done:
             action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-            step_count += 1
-            total_reward += reward
-            
-            exploration_reward = info.get('exploration_reward', 0)
-            total_exploration_reward += exploration_reward
-            
-            if step_count % 100 == 0:
-                print(f"  Step {step_count}, Reward: {reward:.3f}, Exploration: {exploration_reward:.3f}")
-        
-        print(f"  Episode finished in {step_count} steps")
-        print(f"  Total reward: {total_reward:.3f}, Total exploration: {total_exploration_reward:.3f}")
+            obs, reward, done, _, info = env.step(action)
+            print(reward)
+            if if_render:
+                env.render()

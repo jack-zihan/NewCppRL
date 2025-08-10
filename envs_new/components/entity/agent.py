@@ -9,133 +9,110 @@ from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 import numpy as np
 
-from envs_new.components.config.environment_config import AgentConfig
+from envs_new.components.config.environment_config import EnvironmentConfig
 
 
 class Agent(ABC):
     """Abstract base class for all agents in the environment."""
-    
-    def __init__(self, config: AgentConfig, initial_position: Tuple[float, float] = (0.0, 0.0), 
+
+    def __init__(self, config: EnvironmentConfig, initial_position: Tuple[float, float] = (0.0, 0.0),
                  initial_direction: float = 0.0):
-        """
-        Initialize agent with configuration.
-        
-        Args:
-            config: Agent configuration
-            initial_position: Initial (x, y) position
-            initial_direction: Initial direction in degrees
-        """
         self.config = config
         self._x, self._y = initial_position
         self._direction = initial_direction % 360.0
-        self._last_speed = 0.0
-        self._last_steer = 0.0
-    
+        self._backup_state()
+
     @property
     def x(self) -> float:
-        """X coordinate."""
         return self._x
-    
+
     @property
     def y(self) -> float:
-        """Y coordinate."""
         return self._y
-    
+
     @property
     def direction(self) -> float:
-        """Direction in degrees."""
         return self._direction
-    
+
     @property
     def position(self) -> Tuple[float, float]:
-        """Current position as (x, y) tuple."""
         return self._x, self._y
-    
+
     @property
     def position_discrete(self) -> Tuple[int, int]:
-        """Current position as discrete (rounded) coordinates."""
         return round(self._x), round(self._y)
-    
+
     @property
     def last_speed(self) -> float:
-        """Last applied speed."""
         return self._last_speed
-    
+
     @property
     def last_steer(self) -> float:
-        """Last applied steering angle."""
         return self._last_steer
-    
+
     @property
     def width(self) -> float:
-        """Agent width."""
-        return self.config.width
-    
+        return self.config.agent_width
+
     @property
     def length(self) -> float:
-        """Agent length."""
-        return self.config.length
-    
+        return self.config.agent_length
+
     @property
     def vision_length(self) -> float:
-        """Vision range length."""
-        return self.config.vision_length
-    
+        return self.config.agent_vision_length
+
     @property
     def vision_angle(self) -> float:
-        """Vision field of view angle in degrees."""
-        return self.config.vision_angle
-    
+        return self.config.agent_vision_angle
+
     @property
     def occupancy(self) -> float:
-        """Agent's occupancy radius (diagonal distance)."""
+        """Agent's occupancy radius (diagonal distance from center to corner)."""
         return math.hypot(self.width, self.length)
-    
+
     @property
     def lw_ratio(self) -> float:
-        """Length-width ratio angle in degrees."""
+        """Length-width ratio angle used for convex hull corner calculations."""
         return math.degrees(math.atan2(self.width / self.occupancy, self.length / self.occupancy))
-    
+
     @property
     def convex_hull(self) -> np.ndarray:
-        """Agent's convex hull as array of corner points."""
-        angles = [
-            self._direction + self.lw_ratio,
-            self._direction + 180 - self.lw_ratio,
-            self._direction + 180 + self.lw_ratio,
-            self._direction - self.lw_ratio
-        ]
+        """
+        Agent's convex hull as array of corner points.
         
-        hull_points = []
-        for angle in angles:
-            rad = math.radians(angle)
-            x = self._x + self.width * math.cos(rad)
-            y = self._y + self.width * math.sin(rad)
-            hull_points.append((x, y))
-        
-        return np.array(hull_points)
-    
+        Calculates 4 corners of rectangular agent rotated by current direction.
+        Uses trigonometric projection with lw_ratio for precise corner positioning.
+        """
+        return np.array([
+            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 0 + self.lw_ratio)),
+             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 0 + self.lw_ratio))),
+            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 180 - self.lw_ratio)),
+             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 180 - self.lw_ratio))),
+            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 180 + self.lw_ratio)),
+             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 180 + self.lw_ratio))),
+            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 0 - self.lw_ratio)),
+             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 0 - self.lw_ratio))),
+        ])
+
     def reset(self, position: Tuple[float, float], direction: float) -> None:
-        """
-        Reset agent to initial state.
-        
-        Args:
-            position: New position (x, y)
-            direction: New direction in degrees
-        """
         self._x, self._y = position
         self._direction = direction % 360.0
-        self._last_speed = 0.0
-        self._last_steer = 0.0
-    
+        self._backup_state()
+
     def set_position(self, x: float, y: float) -> None:
-        """Set agent position directly."""
         self._x, self._y = x, y
-    
+
     def set_direction(self, direction: float) -> None:
-        """Set agent direction directly."""
         self._direction = direction % 360.0
-    
+
+    def rollback_position(self) -> None:
+        self._x, self._y, self._direction = self._last_x, self._last_y, self._last_direction
+
+    def _backup_state(self, speed: float = 0.0, steer: float = 0.0, **kwargs):
+        self._last_x, self._last_y, self._last_direction = self._x, self._y, self._direction
+        self._last_speed, self._last_steer = speed, steer
+
     @abstractmethod
     def control(self, *args, **kwargs) -> None:
         """Apply control input to update agent state."""
@@ -144,71 +121,51 @@ class Agent(ABC):
 
 class MowerAgent(Agent):
     """Concrete implementation of a mowing robot agent with differential drive dynamics."""
-    
+
     def control(self, speed: float, steer: float) -> None:
         """
         Apply differential drive control to update agent pose.
-        
-        Args:
-            speed: Linear velocity
-            steer: Angular velocity (steering rate)
+        Updates direction first, then calculates position change based on new heading.
         """
-        self._last_speed = speed
-        self._last_steer = steer
-        
-        # Update direction
+        self._backup_state(speed, steer)
+
+        # Update direction first
         self._direction = (self._direction + steer) % 360
-        
-        # Update position based on direction and speed
+
+        # Calculate position change using updated direction
         rad = math.radians(self._direction)
         dx = speed * math.cos(rad)
         dy = speed * math.sin(rad)
-        
+
         self._x += dx
         self._y += dy
-    
+
     def clip_to_bounds(self, width: float, height: float) -> None:
-        """
-        Clip agent position to stay within specified bounds.
-        
-        Args:
-            width: Maximum x coordinate
-            height: Maximum y coordinate
-        """
         self._x = float(np.clip(self._x, 0, width))
         self._y = float(np.clip(self._y, 0, height))
 
 
 class RealAgent(Agent):
     """Agent implementation for real robot data, where pose is set directly."""
-    
+
     def control(self, new_position: Tuple[float, float], new_direction: float) -> None:
-        """
-        Set agent pose directly (for real robot telemetry).
-        
-        Args:
-            new_position: New (x, y) position
-            new_direction: New direction in degrees
-        """
+        """Set agent pose directly from real robot telemetry data."""
+        self._backup_state()
         self._x, self._y = new_position
         self._direction = new_direction % 360
-        self._last_speed = 0.0  # Unknown for real data
-        self._last_steer = 0.0  # Unknown for real data
 
 
 class AgentFactory:
     """Factory for creating different types of agents."""
-    
+
     @staticmethod
-    def create_mower_agent(config: AgentConfig, 
-                          position: Tuple[float, float] = (0.0, 0.0),
-                          direction: float = 0.0) -> MowerAgent:
-        """Create a mowing robot agent."""
+    def create_mower_agent(config: EnvironmentConfig,
+                           position: Tuple[float, float] = (0.0, 0.0),
+                           direction: float = 0.0) -> MowerAgent:
         return MowerAgent(config, position, direction)
-    
+
     @staticmethod
-    def create_real_agent(config: AgentConfig,
-                         position: Tuple[float, float] = (0.0, 0.0),
-                         direction: float = 0.0) -> RealAgent:
-        """Create a real robot agent."""
+    def create_real_agent(config: EnvironmentConfig,
+                          position: Tuple[float, float] = (0.0, 0.0),
+                          direction: float = 0.0) -> RealAgent:
         return RealAgent(config, position, direction)

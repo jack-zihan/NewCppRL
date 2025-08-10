@@ -1,0 +1,24 @@
+# BCP算法配置（基础覆盖规划）
+algorithm:
+  name: "BCP"
+  type: "coverage_planning"
+  
+# 算法特定参数
+parameters:
+  # 基础覆盖参数
+  simple_coverage: true
+  sequential_scan: true
+  
+  # 路径生成
+  straight_line_preference: true
+  turn_minimization: true
+  
+# 覆盖策略
+coverage:
+  pattern: "basic_sequential"
+  coverage_completeness: true
+  
+# 性能参数  
+performance:
+  max_iterations: 5000
+  timeout_seconds: 300

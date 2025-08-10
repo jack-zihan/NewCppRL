@@ -1,20 +1,29 @@
 from pathlib import Path
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+# 设置基础路径（项目根目录）
+BASE_DIR = Path(__file__).parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+def to_absolute_path(path):
+    """将路径转换为绝对路径"""
+    p = Path(path)
+    return str(p if p.is_absolute() else BASE_DIR / p)
+
 import gymnasium as gym
 import torch
 import yaml
 from gymnasium.wrappers import HumanRendering
 from omegaconf import DictConfig
 from torchrl.envs.utils import ExplorationType, set_exploration_type
-from env_make import get_env
+from rules.env_make import get_env
 import os
 import time
 import csv
 import numpy as np
 import envs  # noqa
 
-base_dir = Path(__file__).parent.parent.parent
 episodes = 10
 render = True
 act_randomly = True
@@ -25,23 +34,24 @@ device = 'cpu'
 noise_set = [0, 0, 0]
 
 
-LOG_DIR = '/home/lzh/NewCppRL/logs'
+# 使用 BASE_DIR 构建路径
+LOG_DIR = BASE_DIR / 'rules' / 'logs'
 
+noise_set = [0, 0, 0]
 difficulty = "easy"
-rl_model = "sac_baseline_continuous"
-save_path = os.path.join(LOG_DIR, f"{rl_model}_{difficulty}.csv")
+rl_model = "t[02600]_r[2731.41=2717.75~2750.74].pt"
+save_path = LOG_DIR / f"{rl_model}_{difficulty}.csv"
 
-base_dir = Path(__file__).parent.parent.parent.parent
 episodes = 10
 
 
 device = 'cpu'
-pt_path = '/home/lzh/NewCppRL//ckpt/sac_cont/2024-09-09_01-16-14_tanhnorm_loc/sac_baseline_continuous_t[01100]_r[2570.25=2509.63~2623.36] - 副本.pt'
-model = torch.load(pt_path, map_location=torch.device('cpu')).to(device)
+pt_path = 'rules/ckpt/t[02600]_r[2731.41=2717.75~2750.74].pt'
 
-actor_critic = torch.load(pt_path,map_location=torch.device('cpu')).to(device)
+model = torch.load(to_absolute_path(pt_path), map_location=torch.device('cpu')).to(device)
+
+actor_critic = torch.load(to_absolute_path(pt_path), map_location=torch.device('cpu')).to(device)
 actor = actor_critic[0].to(device)
-noise_set = [0, 0, 0]
 
 env, obs = get_env()
 
@@ -50,7 +60,7 @@ costs = []
 cover_90,cover_95, cover_98, cover, dist_list = -1, -1, -1, [], []
 init_weed = env.map_weed.sum()
 weed_dist = "gaussian"
-random_seed = 58
+random_seed = 25
 map_id = 2
 collapse = -1
 overall_length = 0
@@ -58,6 +68,7 @@ overall_length = 0
 exploration_type = ExplorationType.RANDOM if act_randomly else ExplorationType.DETERMINISTIC
 
 def save_data_to_csv(file_path, weed_dist, random_seed, map_id, noise_set,  collapse, cover_90, cover_95, cover_98,cover, dist_list):
+    file_path = to_absolute_path(file_path)  # 确保路径是绝对路径
     file_exists = os.path.isfile(file_path)
     with open(file_path, mode='a', newline='') as file:
         writer = csv.writer(file)
