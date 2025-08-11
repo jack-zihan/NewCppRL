@@ -54,17 +54,39 @@ class AreaCoverageSacEvaluator(CustomEvaluator):
                     actor: torch.nn.Module,
                     obss: list[Any]) -> list[float]:
         """获取连续动作（SAC使用连续动作空间）"""
+        from tensordict import TensorDict
+        
         with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
             observation = []
             vector = []
             for obs in obss:
                 if isinstance(obs, dict):
                     observation.append(obs['observation'])
-                    vector.append([obs['vector']])
+                    # 处理vector，确保是标量
+                    v = obs['vector']
+                    if isinstance(v, np.ndarray):
+                        v = v.item() if v.size == 1 else v[0]
+                    vector.append([v])
+            
             observation = torch.from_numpy(np.stack(observation, axis=0)).float().to(self.device)
             vector = torch.tensor(numpy.array(vector)).float().to(self.device)
-            # SAC actor返回的是连续动作，使用索引[2]获取确定性动作
-            actions = actor(observation=observation, vector=vector)[2].tolist()
+            
+            # 使用TensorDict调用actor（关键修改）
+            td = TensorDict({
+                'observation': observation,
+                'vector': vector
+            }, batch_size=[len(obss)])
+            
+            # 调用actor
+            td_out = actor(td)
+            
+            # 从TensorDict输出中提取动作
+            if 'action' in td_out:
+                actions = td_out['action'].tolist()
+            else:
+                # 如果没有action键，尝试其他处理方式
+                raise ValueError("Actor输出中没有'action'键")
+                
         return actions
     
     def get_actor(self,

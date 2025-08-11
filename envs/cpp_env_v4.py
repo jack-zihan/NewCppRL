@@ -45,21 +45,9 @@ class CppEnvV4(CppEnvBase):
 
         # 加载hifs方向场（.npy格式）
         hifs_dir = self.map_dir.parent / 'hifs'
-        hifs_filename = f'orientation_map_{self.map_id}.npy'
+        hifs_filename = f'orientation_map_{self.map_id+1}.npy'
         hifs_path = hifs_dir / hifs_filename
-        
-        if hifs_path.exists():
-            # 加载方向场
-            self.map_frontier_hifs = np.load(str(hifs_path)).astype(np.float32)
-            print(f"Loaded orientation field from {hifs_filename}")
-        else:
-            # 文件不存在，创建全-1的数组（无方向引导）
-            self.map_frontier_hifs = np.full(
-                self.map_frontier.shape, 
-                -1.0,
-                dtype=np.float32
-            )
-            print(f"Warning: {hifs_filename} not found, using no direction guidance")
+        self.map_frontier_hifs = np.load(str(hifs_path)).astype(np.float32)
 
     def get_maps_and_mask(self) -> tuple[np.ndarray, list[float]]:
         """生成观测，包含frontier_hifs方向场"""
@@ -289,43 +277,34 @@ class CppEnvV5(CppEnvV4):
     def get_extra_reward(self, steer_tp1, x_t, y_t, x_tp1, y_tp1) -> float:
         """添加方向场奖励作为额外奖励（类似cpp_env_v2的APF奖励）"""
         reward_direction = 0.
-        
-        if self.map_frontier_hifs is not None:
-            try:
-                h, w = self.map_frontier_hifs.shape
-                
-                # 边界检查
-                if 0 <= y_tp1 < h and 0 <= x_tp1 < w and 0 <= y_t < h and 0 <= x_t < w:
-                    # 获取方向场值
-                    field_dir_current = self.map_frontier_hifs[y_tp1, x_tp1]
-                    field_dir_last = self.map_frontier_hifs[y_t, x_t]
-                    
-                    # 计算角度差异（度）
-                    # 如果是-1区域，返回0（不产生惩罚）
-                    angle_diff_current = self._compute_direction_difference_degrees(
-                        self.agent.direction, field_dir_current
-                    )
-                    angle_diff_last = self._compute_direction_difference_degrees(
-                        self.agent.direction, field_dir_last
-                    )
-                    
-                    # 加权平均角度差
-                    weighted_angle_diff = (
-                        self.direction_current_weight * angle_diff_current + 
-                        self.direction_last_weight * angle_diff_last
-                    )
-                    
-                    # 方向场惩罚
-                    # 例如：weight=0.01时
-                    # 0度差异 → 0惩罚
-                    # 30度差异 → -0.3惩罚
-                    # 60度差异 → -0.6惩罚
-                    # 90度差异 → -0.9惩罚
-                    reward_direction = -self.direction_field_weight * weighted_angle_diff
-                    
-            except Exception as e:
-                print(f"Warning: Direction field reward error: {e}")
-        
+
+        # 获取方向场值
+        field_dir_current = self.map_frontier_hifs[y_tp1, x_tp1]
+        field_dir_last = self.map_frontier_hifs[y_t, x_t]
+
+        # 计算角度差异（度）
+        # 如果是-1区域，返回0（不产生惩罚）
+        angle_diff_current = self._compute_direction_difference_degrees(
+            self.agent.direction, field_dir_current
+        )
+        angle_diff_last = self._compute_direction_difference_degrees(
+            self.agent.direction, field_dir_last
+        )
+
+        # 加权平均角度差
+        weighted_angle_diff = (
+            self.direction_current_weight * angle_diff_current +
+            self.direction_last_weight * angle_diff_last
+        )
+
+        # 方向场惩罚
+        # 例如：weight=0.01时
+        # 0度差异 → 0惩罚
+        # 30度差异 → -0.3惩罚
+        # 60度差异 → -0.6惩罚
+        # 90度差异 → -0.9惩罚
+        reward_direction = -self.direction_field_weight * weighted_angle_diff
+
         return reward_direction
 
 
