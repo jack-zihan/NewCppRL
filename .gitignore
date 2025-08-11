@@ -13,6 +13,7 @@
 
 # Virtual environment
 /venv/
+/new_venv/
 
 # IDEs
 /.idea/
@@ -23,7 +24,13 @@
 *mp4
 /logs/
 *pyc
+__pycache__/
+*.py[cod]
 /utils/real_world_video_process/real_world_img
 /utils/real_world_video_process/templates
 /utils/real_world_video_process/video
 /utils/real_world_video_process/process_data
+
+# macOS
+.DS_Store
+rules/.DS_Store
