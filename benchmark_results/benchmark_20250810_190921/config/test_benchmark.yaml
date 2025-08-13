@@ -1,4 +1,0 @@
-benchmark:
-  algorithms:
-    BCP:
-      enabled: true
