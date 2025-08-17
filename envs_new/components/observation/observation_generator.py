@@ -25,21 +25,6 @@ class ObservationGenerator:
         if config.use_multiscale:
             self._validate_multiscale_config()
     
-    def set_random_generator(self, rng: np.random.Generator) -> None:
-        self.rng = rng
-    
-    def _validate_multiscale_config(self) -> None:
-        """预验证多尺度配置的有效性"""
-        # 经过3次池化后的最小尺寸（第4次不需要裁剪中心）
-        min_size_after_pooling = self.config.state_downsize[0] // (2**3)
-        
-        if min_size_after_pooling < self.config.multiscale_feature_size:
-            raise ValueError(
-                f"多尺度配置无效：state_downsize={self.config.state_downsize[0]} "
-                f"经过3次池化后尺寸为{min_size_after_pooling}，"
-                f"小于feature_size={self.config.multiscale_feature_size}"
-            )
-    
     def generate_observation(self, agent: Agent, maps_input: Union[Dict[str, Dict[str, Any]], Dict[str, np.ndarray]]) -> np.ndarray:
         """
         生成观察
@@ -84,7 +69,7 @@ class ObservationGenerator:
         noisy_y, noisy_x, noisy_direction = apply_noise_to_pose(
             agent.y, agent.x, agent.direction,
             self.config.position_noise, self.config.direction_noise,
-            self.rng or np.random.default_rng()
+            self.rng
         )
         
         # 提取ego-centric patch
@@ -121,73 +106,42 @@ class ObservationGenerator:
         """
         obs_list = []
         obs_current = base_observation.copy()
+        center_size = self.config.state_downsize[0] // 2
         feature_size = self.config.multiscale_feature_size
         
         with torch.no_grad():
-            # 生成4个尺度
-            for scale in range(4):
-                if scale == 0:
-                    # 第一个尺度：直接从原始观测中心裁剪
-                    center = self.config.state_downsize[0] // 2
-                    half_size = feature_size // 2
-                    cropped = obs_current[:, 
-                                        center-half_size:center+half_size,
-                                        center-half_size:center+half_size]
-                else:
-                    # 后续尺度：先池化，再从中心裁剪
-                    obs_current = F.max_pool2d(
-                        torch.from_numpy(obs_current), (2, 2), 2
-                    ).numpy()
-                    
-                    current_size = obs_current.shape[1]
-                    center = current_size // 2
-                    half_size = min(feature_size // 2, center)
-                    
-                    # 由于已经预验证，这里不需要边界检查
-                    cropped = obs_current[:, 
-                                        center-half_size:center+half_size,
-                                        center-half_size:center+half_size]
-                    
-                    # 如果最后一个尺度过小，需要resize
-                    if scale == 3 and cropped.shape[1] < feature_size:
-                        cropped_tensor = torch.from_numpy(cropped).unsqueeze(0)
-                        resized = F.interpolate(
-                            cropped_tensor, 
-                            size=(feature_size, feature_size), 
-                            mode='nearest'
-                        )
-                        cropped = resized.squeeze(0).numpy()
-                
+            # 优雅的统一处理：生成4个尺度
+            for _ in range(4):
+                # 从中心裁剪
+                half_size = feature_size // 2
+                cropped = obs_current[:, 
+                                    center_size-half_size:center_size+half_size,
+                                    center_size-half_size:center_size+half_size]
                 obs_list.append(cropped)
+                
+                # 池化准备下一层
+                obs_current = F.max_pool2d(
+                    torch.from_numpy(obs_current), (2, 2), 2
+                ).numpy()
+                center_size //= 2
             
             # 如果启用，添加全局观察
             if self.config.use_global_features:
-                # 全局观测需要包含噪声，复用_extract_base_observation的噪声计算
-                noisy_y, noisy_x, noisy_direction = apply_noise_to_pose(
-                    agent.y, agent.x, agent.direction,
-                    self.config.position_noise, self.config.direction_noise,
-                    self.rng or np.random.default_rng()
-                )
+                # 复用base_observation，它已经包含了正确的噪声和旋转
+                # 计算需要的池化核大小以达到目标尺寸
+                current_size = self.config.state_downsize[0]
+                kernel_size = int(np.round(current_size / feature_size))
                 
-                # 使用完整地图尺寸提取全局视角
-                global_observation = extract_ego_patch(
-                    maps=stacked_maps,
-                    pad_values=pad_values,
-                    center_y=noisy_y,
-                    center_x=noisy_x,
-                    direction_deg=noisy_direction,
-                    patch_size=(stacked_maps.shape[0], stacked_maps.shape[1])
-                )
+                # 这些检查应该在初始化时就通过了，这里用断言确保
+                assert kernel_size >= 1, f"Invalid kernel_size: {kernel_size}"
                 
-                # Resize到feature_size
-                global_resized = cv2.resize(
-                    global_observation,
-                    (feature_size, feature_size),
-                    interpolation=cv2.INTER_AREA
-                )
+                # 使用max_pool2d保持与其他层的一致性
+                obs_global = F.max_pool2d(
+                    torch.from_numpy(base_observation),
+                    (kernel_size, kernel_size),
+                    kernel_size
+                ).numpy()
                 
-                # 转换为 (C, H, W) 格式
-                obs_global = global_resized.transpose(2, 0, 1)
                 obs_list.append(obs_global)
         
         # 连接所有尺度
@@ -207,10 +161,48 @@ class ObservationGenerator:
             
             if self.config.use_global_features:
                 total_channels = multiscale_channels + num_map_channels
-            else:
-                total_channels = multiscale_channels
             
             return (total_channels, self.config.multiscale_feature_size, self.config.multiscale_feature_size)
         else:
             # 标准第一人称观察
             return (num_map_channels, self.config.state_downsize[0], self.config.state_downsize[1])
+
+    def set_random_generator(self, rng: np.random.Generator) -> None:
+        self.rng = rng
+
+    def _validate_multiscale_config(self) -> None:
+        """预验证多尺度配置的有效性"""
+        # 验证多尺度池化配置
+        # 经过3次池化后的最小尺寸（第4次不需要裁剪中心）
+        min_size_after_pooling = self.config.state_downsize[0] // (2 ** 3)
+
+        if min_size_after_pooling < self.config.multiscale_feature_size:
+            raise ValueError(
+                f"多尺度配置无效：state_downsize={self.config.state_downsize[0]} "
+                f"经过3次池化后尺寸为{min_size_after_pooling}，"
+                f"小于feature_size={self.config.multiscale_feature_size}"
+            )
+
+        # 验证全局观察池化配置（如果启用）
+        if self.config.use_global_features:
+            current_size = self.config.state_downsize[0]
+            feature_size = self.config.multiscale_feature_size
+            kernel_size = int(np.round(current_size / feature_size))
+
+            if kernel_size < 1:
+                raise ValueError(
+                    f"全局观察配置无效：state_downsize={current_size} "
+                    f"太小，无法池化到feature_size={feature_size}"
+                )
+
+            # 计算池化后的实际尺寸
+            pooled_size = current_size // kernel_size
+
+            # 验证池化后尺寸是否精确匹配
+            if pooled_size != feature_size:
+                raise ValueError(
+                    f"全局观察池化尺寸不匹配：state_downsize={current_size} "
+                    f"使用kernel_size={kernel_size}池化后得到{pooled_size}，"
+                    f"不等于期望的feature_size={feature_size}。"
+                    f"请调整state_downsize或feature_size使其能够整除"
+                )

@@ -55,23 +55,17 @@ class CppEnv(CppEnvBase):
         map_obstacle = self.maps_dict['obstacle'] 
         map_weed = self.maps_dict['weed']
         map_mist = self.maps_dict.get('mist', np.ones_like(map_frontier))  # 默认全部可见
-        
-        # 处理杂草噪声
-        if hasattr(self, 'noise_weed') and self.noise_weed and hasattr(self, 'np_random'):
-            if self.np_random.uniform() < self.noise_weed:
-                map_weed_ = self.maps_dict.get('weed_noisy', map_weed)
-            else:
-                map_weed_ = map_weed
-        else:
-            map_weed_ = map_weed
-        
+
+        if self.config.weed_noise and self.np_random.uniform() < self.noise_weed:
+            map_weed = self.maps_dict.get('weed_noisy', map_weed)
+
         # 创建观察地图字典，注意obstacle的pad值为1.0
         obs_maps = {
             'frontier': {'map': map_frontier, 'pad': 0.0},                    # 前沿区域
             'mist_inv': {'map': np.logical_not(map_mist), 'pad': 0.0},       # 反转的mist（未探索区域）
             'obstacle': {'map': map_obstacle, 'pad': 1.0},                    # 障碍物（边界视为障碍物）
             'weed': {                                                          # 非前沿区域的杂草
-                'map': np.logical_and(map_weed_, np.logical_not(map_frontier)),
+                'map': np.logical_and(map_weed, np.logical_not(map_frontier)),
                 'pad': 0.0
             }
         }

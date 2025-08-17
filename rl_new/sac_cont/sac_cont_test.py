@@ -38,7 +38,7 @@ class SACTestSession:
         self._setup_directories()
         self._load_model()
         self._setup_environment()
-        
+
     def _setup_directories(self):
         """Setup logging directories."""
         if self.config['log_reward']:
@@ -384,7 +384,7 @@ class SACTestSession:
                         observation = obs['observation']
                         vector = obs['vector']
                     observation = torch.from_numpy(observation).float().to(self.device).unsqueeze(0)
-                    vector = torch.tensor([vector]).float().to(self.device).unsqueeze(0)
+                    vector = torch.tensor([vector]).float().to(self.device)
                     
                     # Get action from model
                     logits = self.actor(observation=observation, vector=vector)

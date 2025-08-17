@@ -5,7 +5,7 @@ Based on the new modular architecture.
 from __future__ import annotations
 
 import numpy as np
-from typing import Dict, Tuple, Optional, Union
+from typing import Dict, Tuple, Optional, Union, Any
 from gymnasium.wrappers import HumanRendering
 
 from envs_new.cpp_env_base import CppEnvBase
@@ -39,6 +39,7 @@ class APFCalculator:
         current_position = agent_pos_info.current
         previous_position = agent_pos_info.last
         
+        # 使用int()进行网格索引查询（floor操作），获取当前所在的网格
         x_curr, y_curr = int(current_position[0]), int(current_position[1])
         x_prev, y_prev = int(previous_position[0]), int(previous_position[1])
         
@@ -76,7 +77,7 @@ class CppEnv(CppEnvBase):
             'use_traj': True,
             'render_mist': True,
             # v2特定的奖励系数（与v1相同的值）
-            'reward_frontier_coverage_coef': 0.5,
+            'reward_frontier_coverage_coef': 1.0,
             'reward_frontier_total_coef': 0.125,
         }
         
@@ -134,24 +135,21 @@ class CppEnv(CppEnvBase):
         map_mist = self.maps_dict.get('mist', np.ones_like(map_frontier))
         map_trajectory = self.maps_dict.get('trajectory', np.zeros_like(map_frontier))
         
-        if hasattr(self, 'noise_weed') and self.noise_weed and hasattr(self, 'np_random'):
-            if self.np_random.uniform() < self.noise_weed:
-                map_weed_ = self.maps_dict.get('weed_noisy', map_weed)
-            else:
-                map_weed_ = map_weed
-        else:
-            map_weed_ = map_weed
+        if self.config.weed_noise and self.np_random.uniform() < self.noise_weed:
+            map_weed = self.maps_dict.get('weed_noisy', map_weed)
         
         from envs_new.utils.math_utils import total_variation_mat
         
         apf_frontier = np.logical_and(total_variation_mat(map_frontier), map_mist)
         apf_obstacle = np.logical_and(total_variation_mat(map_obstacle), map_mist)
-        apf_weed = np.logical_and(map_weed_, np.logical_not(map_frontier))
+        apf_weed = np.logical_and(map_weed, np.logical_not(map_frontier))
         apf_trajectory = map_trajectory
         
         if hasattr(self, 'use_apf') and self.use_apf:
             apf_frontier = self.get_discounted_apf(apf_frontier, 30)
             apf_obstacle = self.get_discounted_apf(apf_obstacle, 10, pad=True)
+            # Critical fix: 确保障碍物本身在APF场中的值为1
+            apf_obstacle = np.maximum(apf_obstacle, np.logical_and(map_obstacle, map_mist))
             apf_weed = self.get_discounted_apf(apf_weed, 40, 1e-2)
             apf_trajectory = self.get_discounted_apf(apf_trajectory, 4)
         
@@ -228,7 +226,7 @@ if __name__ == "__main__":
     real_map_dir = '/home/lzh/NewCppRL/envs/maps/real'
     env = CppEnv(
         render_mode='rgb_array' if if_render else None,  # HumanRendering需要rgb_array
-        # render_first_person=True,  # 控制渲染第一人称视角
+        render_first_person=True,  # 控制渲染第一人称视角
         # use_multiscale=False, # 是否使用多尺度观察
         # use_global_obs=False,
         # num_obstacles_range = [0, 0]

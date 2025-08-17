@@ -81,7 +81,7 @@ def extract_ego_patch(maps: np.ndarray, pad_values: List[float],
     
     # 旋转以使智能体方向向上对齐
     # 180度是因为要将agent的前进方向（默认向右0度）旋转到图像上方
-    rotation_angle = 180 + direction_deg
+    rotation_angle = 90 + direction_deg
     rotation_center = (diagonal_length, diagonal_length)
     rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
     

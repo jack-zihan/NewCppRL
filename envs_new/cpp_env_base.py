@@ -38,13 +38,14 @@ class CppEnvBase(gym.Env):
     """
 
     metadata = {
-        "render_modes": ["rgb_array", "first_person"],
+        "render_modes": ["rgb_array", "first_person"], # 渲染正常图片或者第一人称观测
         "render_fps": 50,
     }
 
     def __init__(self,
                  render_mode: Optional[str] = None,
                  **kwargs):
+        # __init__初始化组件、gym观测动作空间
         super().__init__()
 
         # 极简配置创建：直接使用kwargs
@@ -178,7 +179,7 @@ class CppEnvBase(gym.Env):
         Returns:
             Tuple of (observation, reward, terminated, truncated, info)
         """
-        # Apply dynamics
+        # Apply dynamics，动力学包含动作解析其实是可以的，动作解析解耦后动力学的灵活性会比较受限
         self.agent, self.maps_dict, self.env_state = self.env_dynamics.step(
             self.agent, self.maps_dict, self.env_state, action, self.config.action_type
         )
@@ -215,7 +216,7 @@ class CppEnvBase(gym.Env):
         return {
             'observation': visual_obs,
             'vector': self._normalize_steering(),
-            'weed_ratio': self._get_weed_ratio()
+            'completion_ratio': self._get_completion_ratio()
         }
 
     def _get_observation_maps(self) -> Dict[str, Dict[str, Any]]:
@@ -243,8 +244,8 @@ class CppEnvBase(gym.Env):
         return np.array([self.agent.last_steer / self.config.w_max],
                         dtype=np.float32)
 
-    def _get_weed_ratio(self) -> np.ndarray:
-        """获取杂草完成率"""
+    def _get_completion_ratio(self) -> np.ndarray:
+        """默认获取杂草完成率"""
         return np.array([self.env_state.weed_completion_ratio], dtype=np.float32)
 
     def render(self) -> Optional[np.ndarray]:
@@ -280,22 +281,26 @@ class CppEnvBase(gym.Env):
         """Get detailed reward breakdown for analysis."""
         return self.reward_system.get_reward_breakdown(self.env_state)
 
-    def get_state_info(self) -> Dict[str, Any]:
-        """Get current environment state information."""
-        return self.env_state.to_dict()
+    def get_state_info(self) -> Any:
+        """Get current environment state object."""
+        return self.env_state
 
     def update_config(self, new_config: Dict[str, Any]) -> None:
         """
-        Update environment configuration.
+        Update environment configuration dynamically.
         
         Args:
             new_config: New configuration values
         """
-        # Update reward coefficients if provided
+        # 动态更新config对象的属性
+        # 由于所有组件都持有config的引用，更新会自动传播
+        for key, value in new_config.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, value)
+        
+        # 对于需要特殊处理的配置，保留兼容性
         if 'reward_coefficients' in new_config:
             self.reward_system.update_coefficients(new_config['reward_coefficients'])
-
-        # Additional config updates can be added here
 
     def set_action_type(self, action_type: str) -> None:
         """Change action type and reinitialize action space."""

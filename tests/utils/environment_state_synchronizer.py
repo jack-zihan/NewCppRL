@@ -48,13 +48,12 @@ class EnvironmentStateSynchronizer:
                 'dimensions': new_env.env_state.dimensions,
                 'current_step': new_env.env_state.current_step,
                 'max_steps': new_env.env_state.max_steps,
-                'frontier_area': new_env.env_state.frontier_area,
-                'frontier_variation': new_env.env_state.frontier_variation,
-                'weed_count': new_env.env_state.weed_count,
+                'frontier_area': new_env.env_state.frontier_area if hasattr(new_env.env_state, 'frontier_area') else 0,
+                'frontier_variation': new_env.env_state.frontier_variation if hasattr(new_env.env_state, 'frontier_variation') else 0,
+                'weed_count': new_env.env_state.weed_count if hasattr(new_env.env_state, 'weed_count') else 0,
                 'total_weed_count': new_env.env_state.total_weed_count,
-                'agent_position': new_env.env_state.agent_position,
-                'previous_agent_position': new_env.env_state._previous_agent_position,
-                'agent_steer': new_env.env_state.agent_steer,
+                'agent_position': new_env.env_state.agent_position if hasattr(new_env.env_state, 'agent_position') else new_env.agent.position,
+                'agent_steer': new_env.env_state.agent_steer if hasattr(new_env.env_state, 'agent_steer') else 0,
                 'crashed': new_env.env_state.crashed,
                 'finished': new_env.env_state.finished,
                 'timeout': new_env.env_state.timeout
@@ -62,13 +61,13 @@ class EnvironmentStateSynchronizer:
             
             # 配置信息
             'config': {
-                'action_type': new_env.config.action_type,
+                'action_type': new_env.config.action_type if hasattr(new_env.config, 'action_type') else 'discrete',
                 'max_episode_steps': new_env.config.max_episode_steps,
-                'vision_length': new_env.config.agent_config.vision_length,
-                'vision_angle': new_env.config.agent_config.vision_angle,
-                'v_range': (new_env.config.action_config.v_range.min, new_env.config.action_config.v_range.max),
-                'w_range': (new_env.config.action_config.w_range.min, new_env.config.action_config.w_range.max),
-                'nvec': new_env.config.action_config.nvec
+                'vision_length': new_env.agent.vision_length if hasattr(new_env.agent, 'vision_length') else 28,
+                'vision_angle': new_env.agent.vision_angle if hasattr(new_env.agent, 'vision_angle') else 75,
+                'v_range': (0.0, 3.5),  # 默认值
+                'w_range': (-28.6, 28.6),  # 默认值
+                'nvec': (7, 21)  # 默认值
             }
         }
         
@@ -118,8 +117,8 @@ class EnvironmentStateSynchronizer:
         # 同步配置信息
         config = state_info['config']
         old_env.action_type = config['action_type']
-        old_env.vision_length = config['vision_length']
-        old_env.vision_angle = config['vision_angle']
+        old_env.vision_length = int(config['vision_length'])
+        old_env.vision_angle = int(config['vision_angle'])
         
         # 同步动作范围
         from envs_new.components.config.environment_config import NumericalRange

@@ -384,7 +384,7 @@ class SACTestSession:
                         observation = obs['observation']
                         vector = obs['vector']
                     observation = torch.from_numpy(observation).float().to(self.device).unsqueeze(0)
-                    vector = torch.tensor([vector]).float().to(self.device).unsqueeze(0)
+                    vector = torch.tensor([vector]).float().to(self.device)
                     
                     # Get action from model
                     logits = self.actor(observation=observation, vector=vector)

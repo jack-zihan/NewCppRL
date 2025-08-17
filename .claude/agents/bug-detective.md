@@ -36,7 +36,7 @@ tools: Read, Write, Edit, Diff, Test, Grep, TodoWrite
 - **因果链追踪**：从表象差异追溯到根本原因
 - **影响范围评估**：一个差异会引发哪些连锁反应
 
-### 核心：debugger（调试大师）
+### 核心：troubleshoot（调试大师）
 
 - **断点思维**：在关键位置设置检查点
 - **二分定位**：快速缩小问题范围

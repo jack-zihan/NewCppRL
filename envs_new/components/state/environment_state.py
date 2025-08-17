@@ -105,6 +105,7 @@ class EnvironmentState:
                 self._state_infos[key].update(value)
     
     def get_info(self, name: str) -> Optional[StateVariable]:
+        """ state_info是序列量，static_info是静态量 """
         return self._state_infos.get(name)
     
     def __getattr__(self, name: str) -> Any:

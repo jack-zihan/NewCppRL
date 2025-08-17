@@ -96,9 +96,8 @@ class TurningPenaltyCalculator:
         steer_info = env_state.get_info('agent_steer')
         if not steer_info or steer_info.last is None:
             return 0.0
-            
-        steer_change = abs(steer_info.change())
-        normalized_change = steer_change / config.w_max
+
+        normalized_change = abs(steer_info.change()) / config.w_max
         
         return normalized_change * TurningPenaltyCalculator.coefficient
 

@@ -20,6 +20,7 @@ class Agent(ABC):
         self.config = config
         self._x, self._y = initial_position
         self._direction = initial_direction % 360.0
+        self._speed, self._steer = 0.0, 0.0
         self._backup_state()
 
     @property
@@ -41,6 +42,14 @@ class Agent(ABC):
     @property
     def position_discrete(self) -> Tuple[int, int]:
         return round(self._x), round(self._y)
+
+    @property
+    def speed(self) -> float:
+        return self._speed
+
+    @property
+    def steer(self) -> float:
+        return self._steer
 
     @property
     def last_speed(self) -> float:
@@ -109,9 +118,9 @@ class Agent(ABC):
     def rollback_position(self) -> None:
         self._x, self._y, self._direction = self._last_x, self._last_y, self._last_direction
 
-    def _backup_state(self, speed: float = 0.0, steer: float = 0.0, **kwargs):
+    def _backup_state(self, **kwargs):
         self._last_x, self._last_y, self._last_direction = self._x, self._y, self._direction
-        self._last_speed, self._last_steer = speed, steer
+        self._last_speed, self._last_steer = self._speed, self._steer
 
     @abstractmethod
     def control(self, *args, **kwargs) -> None:
@@ -127,7 +136,7 @@ class MowerAgent(Agent):
         Apply differential drive control to update agent pose.
         Updates direction first, then calculates position change based on new heading.
         """
-        self._backup_state(speed, steer)
+        self._backup_state()
 
         # Update direction first
         self._direction = (self._direction + steer) % 360
@@ -139,10 +148,11 @@ class MowerAgent(Agent):
 
         self._x += dx
         self._y += dy
+        self._speed, self._steer = speed, steer
 
     def clip_to_bounds(self, width: float, height: float) -> None:
-        self._x = float(np.clip(self._x, 0, width))
-        self._y = float(np.clip(self._y, 0, height))
+        self._x = float(np.clip(self._x, 0, width-1)) # 确保0->width-1开区间
+        self._y = float(np.clip(self._y, 0, height-1))
 
 
 class RealAgent(Agent):

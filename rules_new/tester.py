@@ -28,8 +28,7 @@ from helpers import to_yx, to_xy, setup_logging
 # 算法导入
 from algorithms.base import BasePathPlanner
 from algorithms.jump_planner import JumpPlanner
-from algorithms.snake_planner import SnakePlanner
-from algorithms.r_snake_planner import RSnakePlanner
+from algorithms.snake_planner import SnakePlanner, RSnakePlanner
 from algorithms.bcp_planner import BcpPlanner
 from algorithms.react_planner import ReactPlanner
 
@@ -93,10 +92,19 @@ class PathPlannerTester:
         for algo_name, algo_config in self.config.get('algorithms', {}).items():
             if algo_config.get('enabled', True):
                 if algo_name in self.algorithm_registry:
-                    # 简单直接的初始化，不需要复杂的工厂模式
-                    algo_class = self.algorithm_registry[algo_name]
-                    algorithms[algo_name] = algo_class(**algo_config.get('params', {}))
-                    self.logger.info(f"初始化算法: {algo_name}")
+                    try:
+                        # 简单直接的初始化，不需要复杂的工厂模式
+                        algo_class = self.algorithm_registry[algo_name]
+                        algorithms[algo_name] = algo_class(**algo_config.get('params', {}))
+                        self.logger.info(f"✅ 初始化算法: {algo_name}")
+                    except Exception as e:
+                        self.logger.warning(f"⚠️  算法 {algo_name} 初始化失败: {e}")
+                else:
+                    self.logger.warning(f"⚠️  算法 {algo_name} 未在注册表中找到")
+        
+        if not algorithms:
+            self.logger.warning("⚠️  没有成功初始化任何算法！")
+        
         return algorithms
     
     def run_tests(self) -> Dict[str, Any]:

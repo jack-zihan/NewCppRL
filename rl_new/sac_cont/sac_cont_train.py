@@ -75,6 +75,8 @@ def main(cfg: "DictConfig"):  # noqa: F821
     )
 
     # Create the replay buffer
+    # 其实已经用了外存存储机制了
+    #
     tempdir = tempfile.TemporaryDirectory()
     scratch_dir = tempdir.name
     replay_buffer = TensorDictPrioritizedReplayBuffer(

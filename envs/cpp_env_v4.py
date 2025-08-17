@@ -315,25 +315,27 @@ if __name__ == "__main__":
     episodes = 3
     
     # 测试 Pasture-v4 (无多尺度)
-    env = CppEnvV4(
-        render_mode='rgb_array' if if_render else None,
-        # state_pixels=True,
-        state_pixels=False,
-        # use_sgcnn=False,  # V4会强制设为False
-        # use_global_obs=False,
-        # num_obstacles_range = [0, 0]
-    )
-    
-    # 测试 Pasture-v5 (有多尺度和方向场奖励) - 需要时取消注释
-    # env = CppEnvV5(
+    # env = CppEnvV4(
     #     render_mode='rgb_array' if if_render else None,
+    #     map_dir = "/home/lzh/NewCppRL/envs/maps/complex_field/farmland",
     #     # state_pixels=True,
     #     state_pixels=False,
-    #     direction_field_weight=0.01,  # 可调节：每度差异的惩罚
-    #     # use_sgcnn=True,  # V5会强制设为True
-    #     # use_global_obs=True,
+    #     # use_sgcnn=False,  # V4会强制设为False
+    #     # use_global_obs=False,
     #     # num_obstacles_range = [0, 0]
     # )
+    
+    # 测试 Pasture-v5 (有多尺度和方向场奖励) - 需要时取消注释
+    env = CppEnvV5(
+        render_mode='rgb_array' if if_render else None,
+        # state_pixels=True,
+        map_dir="/home/lzh/NewCppRL/envs/maps/complex_field/farmland",
+        state_pixels=False,
+        direction_field_weight=0.01,  # 可调节：每度差异的惩罚
+        # use_sgcnn=True,  # V5会强制设为True
+        # use_global_obs=True,
+        # num_obstacles_range = [0, 0]
+    )
     
     env = HumanRendering(env)  # 封装后，使得step和reset时展示渲染图像
     

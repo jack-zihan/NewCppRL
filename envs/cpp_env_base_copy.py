@@ -612,7 +612,7 @@ class CppEnvBase(gym.Env):
         self.weed_num_t = self.map_weed.sum(dtype=np.int32)
         self.frontier_area_t = self.map_frontier.sum(dtype=np.int32)
         self.frontier_tv_t = total_variation(self.map_frontier.astype(np.int32))
-        self.t = 1
+        self.t = 0
         self.steer_t = 0.
 
         obs = self.observation()
@@ -804,36 +804,36 @@ class CppEnvBase(gym.Env):
                        thickness=-1, )
 
     def render(self):
-        if self.render_mode is None:
-            assert self.spec is not None
-            gym.logger.warn(
-                "You are calling render method without specifying any render mode. "
-                "You can specify the render_mode at initialization, "
-                f'e.g. gym.make("{self.spec.id}", render_mode="rgb_array")'
-            )
-            return
-
-        try:
-            import pygame
-            from pygame import gfxdraw
-        except ImportError as e:
-            raise DependencyNotInstalled(
-                "pygame is not installed, run `pip install gymnasium[classic-control]`"
-            ) from e
-        if self.screen is None:
-            pygame.init()
-            if self.state_pixels:
-                self.screen = pygame.Surface(
-                    (self.state_size[0] * self.render_repeat_times,
-                     self.state_size[1] * self.render_repeat_times)
-                )
-            else:
-                self.screen = pygame.Surface(
-                    (self.dimensions[0] * self.render_repeat_times,
-                     self.dimensions[1] * self.render_repeat_times)
-                )
-        if self.clock is None:
-            self.clock = pygame.time.Clock()
+        # if self.render_mode is None:
+        #     assert self.spec is not None
+        #     gym.logger.warn(
+        #         "You are calling render method without specifying any render mode. "
+        #         "You can specify the render_mode at initialization, "
+        #         f'e.g. gym.make("{self.spec.id}", render_mode="rgb_array")'
+        #     )
+        #     return
+        #
+        # try:
+        #     import pygame
+        #     from pygame import gfxdraw
+        # except ImportError as e:
+        #     raise DependencyNotInstalled(
+        #         "pygame is not installed, run `pip install gymnasium[classic-control]`"
+        #     ) from e
+        # if self.screen is None:
+        #     pygame.init()
+        #     if self.state_pixels:
+        #         self.screen = pygame.Surface(
+        #             (self.state_size[0] * self.render_repeat_times,
+        #              self.state_size[1] * self.render_repeat_times)
+        #         )
+        #     else:
+        #         self.screen = pygame.Surface(
+        #             (self.dimensions[0] * self.render_repeat_times,
+        #              self.dimensions[1] * self.render_repeat_times)
+        #         )
+        # if self.clock is None:
+        #     self.clock = pygame.time.Clock()
 
         if self.state_pixels:
             img = self.render_self()
@@ -841,11 +841,12 @@ class CppEnvBase(gym.Env):
             img = self.render_map()
         # 尝试用cv2和scipy.ndimage插值替换repeat，但是运行速度降低较多，或者插值后图像模糊有锯齿，故保留repeat操作
         img = img.repeat(self.render_repeat_times, axis=0).repeat(self.render_repeat_times, axis=1)  # 按比例缩放render的img
-        surf = pygame.surfarray.make_surface(img)
-        self.screen.blit(surf, (0, 0))
-        return np.transpose(
-            np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
-        )  # pygame数据 (width, height, channels) -> numpy数据 (height, width, channels)
+        # surf = pygame.surfarray.make_surface(img)
+        # self.screen.blit(surf, (0, 0))
+        # return np.transpose(
+        #     np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
+        # )  # pygame数据 (width, height, channels) -> numpy数据 (height, width, channels)
+        return img
 
     def close(self):
         if self.screen is not None:

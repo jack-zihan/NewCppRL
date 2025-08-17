@@ -7,9 +7,20 @@ from typing import Dict, List, Tuple, Optional, Any
 from matplotlib.path import Path
 from shapely.geometry import Point, Polygon
 
-from .base_algorithm import BasePathPlanner
-from .constants import PathConstants, AlgorithmDefaults
-from ..utils.coordinate_system import CoordinateSystem
+from .base import BasePathPlanner
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from helpers import to_yx, to_xy, calculate_distance
+
+# 算法常量
+class PathConstants:
+    DEFAULT_TURNING_RADIUS = 5.0
+
+class AlgorithmDefaults:
+    INITIAL_TURN_DIRECTION = True
+    SNAKE_GREEDY_SEARCH = True
+    SNAKE_FORWARD_ONLY = False
 
 
 class SnakePlanner(BasePathPlanner):

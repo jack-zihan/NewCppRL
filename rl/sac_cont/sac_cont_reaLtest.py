@@ -87,7 +87,7 @@ with set_exploration_type(exploration_type), torch.no_grad():
     while not done:
         if isinstance(obs, dict):
             observation = torch.from_numpy(obs['observation']).float().to(device).unsqueeze(0)
-            vector = torch.tensor([obs['vector']]).float().to(device).unsqueeze(0)
+            vector = torch.tensor([obs['vector']]).float().to(device)
         # observation = torch.from_numpy(observation).float().to(device).unsqueeze(0)
         # vector = torch.tensor([vector]).float().to(device).unsqueeze(0)
         # Get Output

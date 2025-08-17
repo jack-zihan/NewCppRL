@@ -7,11 +7,11 @@ from envs_new.components.dynamics.action_processor import ActionProcessor
 from envs_new.components.dynamics.environment_dynamics import (
     EnvironmentDynamics, 
     FrontierUpdater, WeedUpdater, AgentUpdater, MistUpdater, 
-    TrajectoryUpdater, FlagsUpdater, StepUpdater
+    TrajectoryUpdater, WeedTaskStatusUpdater, FieldTaskStatusUpdater
 )
 
 __all__ = [
     'CollisionDetector', 'ActionProcessor', 'EnvironmentDynamics',
     'FrontierUpdater', 'WeedUpdater', 'AgentUpdater', 
-    'MistUpdater', 'TrajectoryUpdater', 'FlagsUpdater', 'StepUpdater'
+    'MistUpdater', 'TrajectoryUpdater', 'WeedTaskStatusUpdater', 'FieldTaskStatusUpdater'
 ]
