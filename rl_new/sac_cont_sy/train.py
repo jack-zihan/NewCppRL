@@ -15,11 +15,14 @@ import torch
 import torch.cuda
 import tqdm
 from omegaconf import DictConfig
+from tensordict import TensorDict
 from torchrl._utils import logger as torchrl_logger
 from torchrl.collectors import MultiaSyncDataCollector
+from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
 from torchrl.data import LazyMemmapStorage, TensorDictPrioritizedReplayBuffer
 from torchrl.record.loggers import get_logger
+import gymnasium as gym
 
 # 添加项目路径
 base_dir = Path(__file__).parent.parent.parent
@@ -28,6 +31,7 @@ sys.path.append(str(base_dir))
 from rl_new.sac_cont_sy.sac_cont_model import make_sac_models
 from torchrl_utils_new.utils_env import make_sac_env
 from rl_new.sac_cont_sy.sac_utils import setup_devices, create_update_fn
+from torchrl_utils.local_video_recorder import LocalVideoRecorder
 
 torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能
 
@@ -37,6 +41,38 @@ algo_name = 'sac_cont_sy'
 def flatten(td):
     """将TensorDict展平为一维"""
     return td.reshape(-1)
+
+def get_actor_actions(actor, obss, device):
+    """
+    从actor提取多个观测的动作（用于评估）。
+    
+    Args:
+        actor: SAC actor模型
+        obss: 观测列表
+        device: 计算设备
+    
+    Returns:
+        actions: numpy数组的动作列表
+    """
+    observations = []
+    vectors = []
+    
+    for obs in obss:
+        if isinstance(obs, dict):
+            observations.append(obs['observation'])
+            vectors.append([obs['vector']])
+    
+    observations = torch.from_numpy(np.stack(observations, axis=0)).float().to(device)
+    vectors = torch.tensor(np.array(vectors)).float().to(device)
+    
+    # 创建TensorDict并获取确定性动作
+    td = TensorDict({"observation": observations, "vector": vectors}, batch_size=observations.shape[0])
+    with torch.no_grad():
+        td = actor(td)
+    
+    # 返回动作的numpy数组
+    actions = td["action"].cpu().numpy()
+    return actions
 
 # ============ 主训练函数 ============
 @hydra.main(version_base="1.1", config_path=".", config_name="config")

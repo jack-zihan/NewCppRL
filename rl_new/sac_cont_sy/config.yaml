@@ -100,6 +100,12 @@ logger:
   exp_name: Train
   test_interval: 50_000  # 保存checkpoint间隔
   log_freq: 10_000      # 日志记录频率（帧数）
+  # 评估配置
+  eval_interval: 25_000   # 评估频率（帧数）
+  eval_episodes: 4        # 每次评估的episode数量
+  eval_max_steps: 1500    # 每个评估episode的最大步数
+  eval_video: true        # 是否录制评估视频
+  eval_video_skip: 30     # 视频跳帧数（减小文件大小）
 
 # ============ Hydra命令行覆盖示例 ============
 # 使用方法：
