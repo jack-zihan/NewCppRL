@@ -1,0 +1,10 @@
+- collector.total_frames=5000
+- collector.frames_per_batch=500
+- collector.init_random_frames=1500
+- logger.eval_interval=2500
+- logger.eval_episodes=3
+- logger.eval_max_steps=200
+- logger.eval_video=true
+- compile.cudagraph=false
+- logger.test_interval=5000
+- env.env_id=NewPasture-v4

@@ -60,10 +60,14 @@ def get_actor_actions(actor, obss, device):
     for obs in obss:
         if isinstance(obs, dict):
             observations.append(obs['observation'])
-            vectors.append([obs['vector']])
+            vectors.append(obs['vector'])  # 不需要额外包装成列表
     
     observations = torch.from_numpy(np.stack(observations, axis=0)).float().to(device)
     vectors = torch.tensor(np.array(vectors)).float().to(device)
+    
+    # 确保vector是正确的shape
+    if vectors.ndim == 1:
+        vectors = vectors.unsqueeze(-1)
     
     # 创建TensorDict并获取确定性动作
     td = TensorDict({"observation": observations, "vector": vectors}, batch_size=observations.shape[0])
@@ -73,6 +77,136 @@ def get_actor_actions(actor, obss, device):
     # 返回动作的numpy数组
     actions = td["action"].cpu().numpy()
     return actions
+
+def evaluate_policy(actor, env_id, env_kwargs, device, logger, step, cfg):
+    """
+    评估策略在多个episode上的表现，并录制视频。
+    
+    Args:
+        actor: SAC actor模型
+        env_id: 环境ID
+        env_kwargs: 环境参数
+        device: 计算设备
+        logger: 日志记录器
+        step: 当前训练步数
+        cfg: 配置对象
+    
+    Returns:
+        eval_metrics: 评估指标字典
+    """
+    # 创建评估环境（确保使用连续动作空间）
+    eval_envs = []
+    for _ in range(cfg.logger.eval_episodes):
+        # 创建连续动作空间的环境
+        env = gym.make(
+            env_id, 
+            render_mode=None,
+            action_type='continuous',  # 关键：使用连续动作空间
+            **env_kwargs
+        )
+        eval_envs.append(env)
+    
+    # 设置视频录制器（如果启用）
+    recorder = None
+    if cfg.logger.eval_video:
+        max_frames = min(4, cfg.logger.eval_episodes)  # 最多录制4个环境的视频
+        recorder = LocalVideoRecorder(
+            max_len=(cfg.logger.eval_max_steps * max_frames) // cfg.logger.eval_video_skip + 2,
+            skip=1,
+            use_memmap=True,
+            make_grid=True,
+            nrow=2,
+            fps=6,
+        )
+    
+    # 使用确定性策略进行评估
+    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        # 初始化episode
+        obss = []
+        for env in eval_envs:
+            obs, _ = env.reset()
+            obss.append(obs)
+        
+        rewards = [0.0] * cfg.logger.eval_episodes
+        dones = [False] * cfg.logger.eval_episodes
+        completion_ratios = [0.0] * cfg.logger.eval_episodes  # 场地覆盖率（如果存在）
+        
+        # 录制初始帧
+        if recorder:
+            pixels = []
+            for idx in range(min(4, cfg.logger.eval_episodes)):
+                env = eval_envs[idx]
+                # 使用render()获取图像
+                pixel = env.render()
+                if pixel is not None:
+                    pixels.append(pixel)
+            if pixels:
+                recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
+        
+        # 评估循环
+        for t in range(cfg.logger.eval_max_steps):
+            # 获取动作
+            actions = get_actor_actions(actor, obss, device)
+            
+            # 执行环境步进
+            new_obss = []
+            act_idx = 0
+            for idx, env in enumerate(eval_envs):
+                if not dones[idx]:
+                    obs, reward, terminated, truncated, info = env.step(actions[act_idx])
+                    new_obss.append(obs)
+                    rewards[idx] += reward
+                    dones[idx] = terminated or truncated
+                    # 获取completion_ratio（如果存在）
+                    if isinstance(obs, dict) and 'completion_ratio' in obs:
+                        completion_ratios[idx] = obs['completion_ratio']
+                    act_idx += 1
+            
+            obss = new_obss
+            
+            # 录制视频帧
+            if recorder and (t + 1) % cfg.logger.eval_video_skip == 0:
+                pixels = []
+                for idx in range(min(4, cfg.logger.eval_episodes)):
+                    if not dones[idx]:
+                        pixel = eval_envs[idx].render()
+                        if pixel is not None:
+                            pixels.append(pixel)
+                if pixels:
+                    recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
+            
+            # 检查是否所有episode都结束
+            if all(dones):
+                break
+    
+    # 计算评估指标
+    eval_metrics = {
+        "eval/reward": np.mean(rewards),
+        "eval/reward_std": np.std(rewards),
+        "eval/reward_min": np.min(rewards),
+        "eval/reward_max": np.max(rewards),
+        "eval/episodes": len(rewards),
+    }
+    
+    # 如果有completion_ratio，添加到指标中
+    if any(cr > 0 for cr in completion_ratios):
+        eval_metrics["eval/completion_ratio"] = np.mean(completion_ratios)
+    
+    # 记录指标和视频
+    if logger:
+        for key, value in eval_metrics.items():
+            logger.log_scalar(key, value, step=step)
+        
+        if recorder:
+            video_tensor = recorder.dump()
+            if video_tensor is not None:
+                logger.log_video('eval/video', video_tensor, step=step)
+    
+    # 清理环境
+    for env in eval_envs:
+        env.close()
+    
+    return eval_metrics
 
 # ============ 主训练函数 ============
 @hydra.main(version_base="1.1", config_path=".", config_name="config")
@@ -332,6 +466,28 @@ def main(cfg: DictConfig):
                     ckpt_path / model_name
                 )
                 torchrl_logger.info(f"保存模型: {model_name}")
+            
+            # ============ 评估 ============
+            eval_interval = cfg.logger.get('eval_interval', 25000)
+            if collected_frames % eval_interval == 0 and collected_frames > 0:
+                torchrl_logger.info(f"开始评估 (frames: {collected_frames})")
+                
+                # 执行评估
+                eval_metrics = evaluate_policy(
+                    actor=actor,
+                    env_id=cfg.env.env_id,
+                    env_kwargs=env_kwargs,
+                    device=train_device,
+                    logger=logger,
+                    step=collected_frames,
+                    cfg=cfg
+                )
+                
+                # 记录评估结果
+                torchrl_logger.info(
+                    f"评估完成 - 奖励: {eval_metrics['eval/reward']:.2f} ± {eval_metrics['eval/reward_std']:.2f} "
+                    f"[{eval_metrics['eval/reward_min']:.2f}, {eval_metrics['eval/reward_max']:.2f}]"
+                )
             
             # 检查是否达到总帧数
             if collected_frames >= cfg.collector.total_frames:
