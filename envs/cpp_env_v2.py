@@ -245,7 +245,7 @@ if __name__ == "__main__":
     #     "weed_num": 100
     # })
     # os.makedirs(real_map_dir, exist_ok=True)
-    # cv2.imwrite(os.path.join(real_map_dir, 'map_frontier.png'), env.map_frontier * 255)
+    # cv2.imwrite(os.path.join(real_map_dir, 'map_field.png'), env.map_frontier * 255)
     # cv2.imwrite(os.path.join(real_map_dir, 'map_obstacle.png'), env.map_obstacle * 255)
     # cv2.imwrite(os.path.join(real_map_dir, 'map_weed.png'), env.map_weed * 255)
     # print(f"Maps saved to {real_map_dir}")

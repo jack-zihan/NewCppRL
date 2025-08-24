@@ -78,7 +78,7 @@ class ActionProcessor:
             return int(action)
         
         elif action_type in ["multi_discrete", "continuous"]:
-            if not (isinstance(action, (tuple, list)) and len(action) == 2):
+            if not (isinstance(action, (tuple, list, np.ndarray)) and len(action) == 2):
                 raise ValueError(f"Expected tuple of length 2 for {action_type} action, got {action}")
             return tuple(action)
         

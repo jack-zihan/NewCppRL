@@ -34,7 +34,6 @@ environment_overrides:
   use_box_boundary: true
   use_traj: false  # 简化配置以加快测试
   use_mist: false  # 简化配置
-  obs_use_mist: false  # 简化配置
   use_global_features: false  # 简化配置以加快测试
   use_multiscale: false  # 简化配置
 

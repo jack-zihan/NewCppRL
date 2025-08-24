@@ -74,9 +74,21 @@ def main(cfg: "DictConfig"):  # noqa: F821
         max_frames_per_traj=-1,
     )
 
-    # Create the replay buffer
-    tempdir = tempfile.TemporaryDirectory()
+
+    # Create the replay buffer with configurable scratch directory
+    # 从配置读取scratch_dir，如果没有则使用默认值
+    scratch_base_dir = cfg.buffer.get('scratch_dir', '/home/lzh/data/rl_buffers')
+    
+    # 创建项目特定的子目录
+    scratch_parent = Path(scratch_base_dir) / algo_name / ckpt_dir
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    
+    # 创建临时目录
+    tempdir = tempfile.TemporaryDirectory(dir=str(scratch_parent), prefix='buffer_')
     scratch_dir = tempdir.name
+    
+    torchrl_logger.info(f"📁 Replay buffer临时文件存储在: {scratch_dir}")
+    
     replay_buffer = TensorDictPrioritizedReplayBuffer(
         alpha=0.7,
         beta=0.5,
@@ -277,6 +289,14 @@ def main(cfg: "DictConfig"):  # noqa: F821
     end_time = time.time()
     execution_time = end_time - start_time
     torchrl_logger.info(f"Training took {execution_time:.2f} seconds to finish")
+    
+    # 清理临时文件
+    try:
+        tempdir.cleanup()
+        torchrl_logger.info(f"✅ 临时缓冲区文件已清理")
+    except Exception as e:
+        torchrl_logger.warning(f"⚠️ 清理临时文件失败: {e}")
+    
     time.sleep(5)
 
 

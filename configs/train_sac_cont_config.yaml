@@ -1,4 +1,7 @@
-device: null
+# GPU配置
+gpus: null  # null=全部GPU, [0,1,2]=指定GPU, []=仅CPU
+device: null  # 训练设备，null=自动选择
+
 #pretrained_model: ckpt/train/2024-08-20_04-34-49_Apf/t[01700]_r[316.39].pt
 pretrained_model: null
 ckpt_name: v2_no_traj
@@ -8,8 +11,16 @@ seed: 42
 collector:
   total_frames: 4_000_000
   frames_per_batch: 20
-  num_envs: 32
+  num_envs: 32  # 当gpu_devices和cpu_workers都为null时使用
   init_random_frames: 50_000
+  
+  # 多GPU/CPU收集器配置（三参数智能配置）
+  # null: 不使用该类型设备
+  # -1: 最大化使用（GPU使用全部，CPU使用全部核心-2）
+  # 数字/列表: 具体配置
+  gpu_devices: null  # null不使用GPU | -1使用全部GPU | [0,1,2]指定GPU
+  processes_per_gpu: 2  # 每个GPU运行的进程数（RTX 3090建议2-3）
+  cpu_workers: null  # null不使用CPU | -1最大化CPU | 数字指定CPU进程数
 
 # buffer
 buffer:

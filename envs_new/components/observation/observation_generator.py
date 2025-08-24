@@ -74,21 +74,15 @@ class ObservationGenerator:
         
         # 提取ego-centric patch
         ego_observation = extract_ego_patch(
-            maps=stacked_maps,
-            pad_values=pad_values,
-            center_y=noisy_y,
-            center_x=noisy_x,
-            direction_deg=noisy_direction,
-            patch_size=self.config.state_size
-        )
+            maps=stacked_maps, pad_values=pad_values, patch_size=self.config.state_size,
+            center_y=noisy_y, center_x=noisy_x, direction_deg=noisy_direction,)
         
         # Resize到目标尺寸（如果需要）
         if self.config.state_downsize != self.config.state_size:
             ego_observation = cv2.resize(
                 ego_observation,
                 (self.config.state_downsize[1], self.config.state_downsize[0]),
-                interpolation=cv2.INTER_NEAREST
-            )
+                interpolation=cv2.INTER_NEAREST)
         
         # 转换为 (C, H, W) 格式
         return ego_observation.transpose(2, 0, 1).astype(np.float32)
@@ -139,8 +133,7 @@ class ObservationGenerator:
                 obs_global = F.max_pool2d(
                     torch.from_numpy(base_observation),
                     (kernel_size, kernel_size),
-                    kernel_size
-                ).numpy()
+                    kernel_size).numpy()
                 
                 obs_list.append(obs_global)
         

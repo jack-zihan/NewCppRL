@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from typing import Dict, List, Tuple, TypeVar, Generic, Optional, Any
+import numpy as np
 
 
 T = TypeVar('T')
@@ -14,8 +15,7 @@ class StateVariable(Generic[T]):
     def __init__(self, name: str, history_length: int = 2, initial_value: T = None):
         self._name = name
         self._history: deque[T] = deque(maxlen=history_length)
-        if initial_value is not None:
-            self._history.append(initial_value)
+        if initial_value is not None: self._history.append(initial_value)
 
     @property
     def name(self) -> str:
@@ -40,20 +40,19 @@ class StateVariable(Generic[T]):
         支持数值类型（返回 current - past）和元组类型（返回逐元素差值）。
         非数值类型返回 None。
         """
-        if len(self._history) <= steps_back:
-            return 0
+        if len(self._history) <= steps_back: return 0
 
         current_val = self.current
         past_val = self._history[-(steps_back + 1)]
 
-        # Handle numeric types (int, float)
-        if isinstance(current_val, (int, float)) and isinstance(past_val, (int, float)):
-            return current_val - past_val
+        # Handle numeric types (int, float, numpy types)
+        if isinstance(current_val, (int, float, np.integer, np.floating)) and isinstance(past_val, (int, float, np.integer, np.floating)):
+            return float(current_val) - float(past_val)
 
         # Handle tuple types with numeric elements
         if isinstance(current_val, tuple) and isinstance(past_val, tuple):
-            if all(isinstance(x, (int, float)) for x in current_val + past_val):
-                return tuple(c - p for c, p in zip(current_val, past_val))
+            if all(isinstance(x, (int, float, np.integer, np.floating)) for x in current_val + past_val):
+                return tuple(float(c) - float(p) for c, p in zip(current_val, past_val))
 
         return None
 
@@ -62,8 +61,7 @@ class StateVariable(Generic[T]):
 
     def reset(self, initial_value: T = None) -> None:
         self._history.clear()
-        if initial_value is not None:
-            self._history.append(initial_value)
+        if initial_value is not None: self._history.append(initial_value)
 
     def __len__(self) -> int:
         return len(self._history)
@@ -77,19 +75,9 @@ class EnvironmentState:
     def __init__(self):
         self._state_infos: Dict[str, StateVariable] = {}
         self._static_info: Dict[str, Any] = {}  # 非序列静态信息
-        
-        # 核心静态属性，支持直接访问以保持向后兼容
-        self.dimensions: Tuple[int, int] = (0, 0)
-        self.total_weed_count: int = 0
-        self.total_frontier_area: int = 0
-        self.max_steps: int = 300000
     
     def set_static_info(self, key: str, value: Any) -> None:
         self._static_info[key] = value
-        
-        # 为核心属性设置实例属性以便直接访问
-        if key in ['dimensions', 'total_weed_count', 'total_frontier_area', 'max_steps']:
-            setattr(self, key, value)
     
     def get_static_info(self, key: str, default: Any = None) -> Any:
         return self._static_info.get(key, default)
@@ -117,12 +105,6 @@ class EnvironmentState:
         
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
     
-    def reset(self, dimensions: Tuple[int, int], total_weed_count: int, max_steps: int = 3000) -> None:
-        """重置环境状态"""
-        self.set_static_info('dimensions', dimensions)
-        self.set_static_info('total_weed_count', total_weed_count)
-        self.set_static_info('max_steps', max_steps)
-    
     @property
     def is_done(self) -> bool:
         crashed = self._state_infos.get('crashed', StateVariable('crashed', 1, False)).current
@@ -131,12 +113,20 @@ class EnvironmentState:
         return bool(crashed or finished or timeout)
     
     @property
-    def weed_completion_ratio(self) -> float: #TODO: 这个功能要考虑有没有这个组件
+    def weed_coverage_ratio(self) -> float: #TODO: 这个功能要考虑有没有这个组件
         """杂草清除完成率：0.0（未清除）到 1.0（全部清除）"""
         if self.total_weed_count == 0:
             return 1.0
         current_weed_count = self._state_infos.get('weed_count', StateVariable('weed_count', 1, 0)).current or 0
         return 1.0 - (current_weed_count / self.total_weed_count)
+
+    @property
+    def field_coverage_ratio(self) -> float: #TODO: 这个功能要考虑有没有这个组件
+        """field覆盖完成率：0.0（未覆盖）到 1.0（全部覆盖）"""
+        if self.total_field_area == 0:
+            return 1.0
+        current_field_area = self._state_infos.get('field_area', StateVariable('field_area', 1, 0)).current or 0
+        return 1.0 - (current_field_area / self.total_field_area)
 
 
 class StateTracker:
@@ -150,7 +140,7 @@ class StateTracker:
     def setup_long_term_tracking(self, env_state: EnvironmentState, tracked_vars: List[str] = None) -> None:
         """为指定状态变量初始化长期追踪。"""
         if tracked_vars is None:
-            tracked_vars = ['frontier_area', 'weed_count', 'agent_position', 'trajectory_length', 'current_step']
+            tracked_vars = ['field_area', 'weed_count', 'agent_position', 'trajectory_length', 'current_step']
 
         for var_name in tracked_vars:
             state_var = env_state.get_info(var_name)

@@ -26,11 +26,11 @@ class EnvironmentStateSynchronizer:
         state_info = {
             # 地图信息
             'maps': {
-                'field_frontier': new_env.maps_dict['field_frontier'].copy(),
+                'field': new_env.maps_dict['field'].copy(),
                 'obstacle': new_env.maps_dict['obstacle'].copy(), 
                 'weed': new_env.maps_dict['weed'].copy(),
-                'trajectory': new_env.maps_dict.get('trajectory', np.zeros_like(new_env.maps_dict['field_frontier'])).copy(),
-                'mist': new_env.maps_dict.get('mist', np.ones_like(new_env.maps_dict['field_frontier'])).copy(),
+                'trajectory': new_env.maps_dict.get('trajectory', np.zeros_like(new_env.maps_dict['field'])).copy(),
+                'mist': new_env.maps_dict.get('mist', np.ones_like(new_env.maps_dict['field'])).copy(),
             },
             
             # 智能体状态
@@ -48,8 +48,8 @@ class EnvironmentStateSynchronizer:
                 'dimensions': new_env.env_state.dimensions,
                 'current_step': new_env.env_state.current_step,
                 'max_steps': new_env.env_state.max_steps,
-                'frontier_area': new_env.env_state.frontier_area if hasattr(new_env.env_state, 'frontier_area') else 0,
-                'frontier_variation': new_env.env_state.frontier_variation if hasattr(new_env.env_state, 'frontier_variation') else 0,
+                'field_area': new_env.env_state.field_area if hasattr(new_env.env_state, 'field_area') else 0,
+                'field_variation': new_env.env_state.field_variation if hasattr(new_env.env_state, 'field_variation') else 0,
                 'weed_count': new_env.env_state.weed_count if hasattr(new_env.env_state, 'weed_count') else 0,
                 'total_weed_count': new_env.env_state.total_weed_count,
                 'agent_position': new_env.env_state.agent_position if hasattr(new_env.env_state, 'agent_position') else new_env.agent.position,
@@ -84,14 +84,14 @@ class EnvironmentStateSynchronizer:
         """
         # 同步地图
         maps = state_info['maps']
-        old_env.map_frontier = maps['field_frontier'].copy()
+        old_env.map_frontier = maps['field'].copy()
         old_env.map_obstacle = maps['obstacle'].copy()
         old_env.map_weed = maps['weed'].copy()
         old_env.map_trajectory = maps['trajectory'].copy()  
         old_env.map_mist = maps['mist'].copy()
         
         # 同步原始地图（用于渲染）
-        old_env.map_frontier_full = maps['field_frontier'].copy()
+        old_env.map_frontier_full = maps['field'].copy()
         if hasattr(old_env, 'map_weed_ori'):
             old_env.map_weed_ori = maps['weed'].copy()
         
@@ -108,8 +108,8 @@ class EnvironmentStateSynchronizer:
         old_env.t = env_state['current_step']
         
         # 同步状态追踪变量（用于奖励计算）
-        old_env.frontier_area_t = env_state['frontier_area']
-        old_env.frontier_tv_t = env_state['frontier_variation'] 
+        old_env.frontier_area_t = env_state['field_area']
+        old_env.frontier_tv_t = env_state['field_variation'] 
         old_env.weed_num_t = env_state['weed_count']
         old_env.steer_t = env_state['agent_steer']
         old_env.weed_num = env_state['total_weed_count']
@@ -157,11 +157,11 @@ class EnvironmentStateSynchronizer:
             ]),
             'agent_direction_diff': abs(old_env.agent.direction - new_env.agent.direction),
             'agent_steer_diff': abs(old_env.agent.last_steer - new_env.agent.last_steer),
-            'frontier_area_diff': abs(old_env.frontier_area_t - new_env.env_state.frontier_area),
+            'field_area_diff': abs(old_env.frontier_area_t - new_env.env_state.field_area),
             'weed_count_diff': abs(old_env.weed_num_t - new_env.env_state.weed_count),
             'step_diff': abs(old_env.t - new_env.env_state.current_step),
             'maps_equal': {
-                'frontier': np.array_equal(old_env.map_frontier, new_env.maps_dict['field_frontier']),
+                'field': np.array_equal(old_env.map_frontier, new_env.maps_dict['field']),
                 'obstacle': np.array_equal(old_env.map_obstacle, new_env.maps_dict['obstacle']),
                 'weed': np.array_equal(old_env.map_weed, new_env.maps_dict['weed']),
                 'trajectory': np.array_equal(old_env.map_trajectory, new_env.maps_dict.get('trajectory', np.zeros_like(old_env.map_trajectory))),
@@ -190,8 +190,8 @@ class EnvironmentStateSynchronizer:
             'agent_steer_diff': abs(old_env.agent.last_steer - new_env.agent.last_steer),
             
             # 环境状态比较
-            'frontier_area_diff': abs(old_env.frontier_area_t - new_env.env_state.frontier_area),
-            'frontier_tv_diff': abs(old_env.frontier_tv_t - new_env.env_state.frontier_variation),
+            'field_area_diff': abs(old_env.frontier_area_t - new_env.env_state.field_area),
+            'field_tv_diff': abs(old_env.frontier_tv_t - new_env.env_state.field_variation),
             'weed_count_diff': abs(old_env.weed_num_t - new_env.env_state.weed_count),
             'step_diff': abs(old_env.t - new_env.env_state.current_step),
             
@@ -206,7 +206,7 @@ class EnvironmentStateSynchronizer:
             
             # 地图状态比较
             'maps_equal': {
-                'frontier': np.array_equal(old_env.map_frontier, new_env.maps_dict['field_frontier']),
+                'field': np.array_equal(old_env.map_frontier, new_env.maps_dict['field']),
                 'weed': np.array_equal(old_env.map_weed, new_env.maps_dict['weed']),
                 'trajectory': np.array_equal(old_env.map_trajectory, new_env.maps_dict.get('trajectory', np.zeros_like(old_env.map_trajectory))),
                 'mist': np.array_equal(old_env.map_mist, new_env.maps_dict.get('mist', np.ones_like(old_env.map_mist)))
@@ -214,7 +214,7 @@ class EnvironmentStateSynchronizer:
             
             # 地图变化量比较
             'map_changes': {
-                'frontier_pixels_changed': int(np.sum(old_env.map_frontier != new_env.maps_dict['field_frontier'])),
+                'field_pixels_changed': int(np.sum(old_env.map_frontier != new_env.maps_dict['field'])),
                 'weed_pixels_changed': int(np.sum(old_env.map_weed != new_env.maps_dict['weed'])),
                 'trajectory_pixels_changed': int(np.sum(old_env.map_trajectory != new_env.maps_dict.get('trajectory', np.zeros_like(old_env.map_trajectory)))),
                 'mist_pixels_changed': int(np.sum(old_env.map_mist != new_env.maps_dict.get('mist', np.ones_like(old_env.map_mist))))
@@ -236,9 +236,11 @@ class EnvironmentStateSynchronizer:
         print(f"Agent Steer Diff: {comparison['agent_steer_diff']:.6f}")
         
         # 环境状态
-        print(f"Frontier Area Diff: {comparison['frontier_area_diff']}")
-        if 'frontier_tv_diff' in comparison:
-            print(f"Frontier TV Diff: {comparison['frontier_tv_diff']}")
+        print(f"Field Area Diff: {comparison.get('field_area_diff', comparison.get('frontier_area_diff', 0))}")
+        if 'field_tv_diff' in comparison:
+            print(f"Field TV Diff: {comparison['field_tv_diff']}")
+        elif 'frontier_tv_diff' in comparison:
+            print(f"Field TV Diff: {comparison['frontier_tv_diff']}")
         print(f"Weed Count Diff: {comparison['weed_count_diff']}")
         print(f"Step Diff: {comparison['step_diff']}")
         

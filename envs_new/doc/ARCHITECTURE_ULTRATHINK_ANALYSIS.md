@@ -88,7 +88,7 @@ class StateVariable(Generic[T]):
 REWARD_ARCHITECTURE = {
     'base_penalty': -0.1,          # Constant time pressure
     'weed_removal': 20.0,          # Primary objective
-    'frontier_coverage': 1.0,      # Exploration incentive
+    'field_coverage': 1.0,          # Coverage incentive
     'turning_smoothness': 0.25,    # Motion quality
     'collision_penalty': -399.0,   # Safety enforcement
     'completion_bonus': 500.0       # Success reward
@@ -105,7 +105,7 @@ class DependencyResolution:
     
     DEPENDENCY_GRAPH = {
         'agent': [],                    # No dependencies
-        'frontier': [],                  # No dependencies
+        'field': [],                     # No dependencies
         'weed': [],                     # No dependencies
         'mist': [],                     # No dependencies
         'trajectory': ['agent'],        # Needs agent position
@@ -114,7 +114,7 @@ class DependencyResolution:
     }
     
     # Topological sort ensures correct execution order
-    # Result: [agent, frontier, weed, mist, trajectory, flags, step]
+    # Result: [agent, field, weed, mist, trajectory, flags, step]
 ```
 
 ## Part II: Critical Technical Improvements
@@ -154,7 +154,7 @@ class APFTransformation:
     """
     
     CONFIGURATIONS = {
-        'frontier': {'max_step': 30, 'eps': None, 'pad': False},
+        'field': {'max_step': 30, 'eps': None, 'pad': False},
         'obstacle': {'max_step': 10, 'eps': None, 'pad': True},  # Padding for boundary
         'weed': {'max_step': 40, 'eps': 1e-2, 'pad': False},
         'trajectory': {'max_step': 4, 'eps': None, 'pad': False}

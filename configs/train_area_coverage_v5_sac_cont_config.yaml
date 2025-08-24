@@ -15,6 +15,7 @@ collector:
 buffer:
   buffer_size: 300_000  # 比V4稍大
   batch_size: 2048
+  scratch_dir: /home/lzh/data/rl_buffers  # 临时文件存储路径
 
 # Optim
 optim:

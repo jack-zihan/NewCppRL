@@ -1,0 +1,139 @@
+# SAC训练配置 - 同步版本 (sy)
+# 支持Hydra命令行覆盖和环境选择
+
+# 基础配置
+pretrained_model: null
+ckpt_name: sync_version
+seed: 42
+
+# ============ 环境配置 ============
+env:
+  env_id: "NewPasture-v2"  # 可选: NewPasture-v1, v2, v3, v4, v5
+  # v1: 基础环境（含杂草）
+  # v2: APF增强环境（默认）
+  # v3: 多尺度特征环境
+  # v4: 纯场地覆盖（无杂草）
+  # v5: HIF引导的场地覆盖
+  
+  # 环境特定参数（可选）
+  env_kwargs:
+    # v2环境默认使用APF，不需要额外配置
+    # 如需自定义参数，请参考具体环境文档
+
+# ============ 数据收集配置 ============
+collector:
+  total_frames: 4_000_000
+  frames_per_batch: 1000  # 同步模式使用较小批次
+  init_random_frames: 50_000  # 减少初始随机帧
+  # update_freq 不需要（同步模式）
+  
+  # 多GPU/CPU收集配置（简洁直接）
+  # -1: 使用所有可用设备（自动排除训练GPU）
+  # null: 不使用该类型设备
+  # 列表: 指定设备ID
+  gpu_devices: null        # 默认不使用GPU收集（单GPU场景）
+  processes_per_gpu: 8     # 每个GPU运行2个进程（RTX 3090最优）
+  cpu_workers: 8           # 使用8个CPU进程进行收集
+  
+  # 备选配置示例：
+  # gpu_devices: -1        # 自动使用所有GPU（排除训练GPU）
+  # gpu_devices: null      # 不使用GPU收集
+  # cpu_workers: -1        # 使用所有CPU核心-2
+  # cpu_workers: null      # 不使用CPU收集  
+  # num_envs: 32          # gpu_devices和cpu_workers都为null时的默认环境数
+  
+  # 性能优化
+  pin_memory: true        # 锁定内存，加速GPU传输
+
+# ============ 训练配置 ============
+training:
+  device: cuda:0          # 训练使用的GPU（收集器会自动排除此GPU）
+  use_amp: true          # 混合精度训练（适合0-1掩码和浮点APF混合数据）
+  total_updates: 1_000_000  # 总训练更新次数（与收集帧数独立）
+
+# ============ 回放缓冲区 ============
+buffer:
+  buffer_size: 500_000
+  batch_size: 1024  # 同步模式使用较小批次
+  pin_memory: true        # 锁定内存优化
+  prefetch: 3            # 同步模式减少预取
+  temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
+
+# ============ 优化器配置 ============
+optim:
+  # Actor学习率（保持原始配置）
+  lr_actor: 1.0e-5
+  weight_decay_actor: 1.0e-4
+  
+  # Critic学习率
+  lr_critic: 3.0e-4
+  weight_decay_critic: 0
+  
+  # Alpha学习率
+  lr_alpha: 3.0e-4
+  weight_decay_alpha: 0
+  
+  # 梯度裁剪
+  max_grad_norm: null    # null表示不裁剪，建议设置为1.0或10.0
+
+# ============ 损失函数配置 ============
+loss:
+  gamma: 0.99
+  target_update_polyak: 0.9997
+  target_entropy_weight: 0.2
+  target_entropy: "auto"
+  utd_ratio: 1            # 同步模式通常使用1:1比率
+  loss_function: l2
+
+# ============ 编译优化（借鉴官方SAC） ============
+compile:
+  enable: true           # 启用torch.compile（5-10x加速）
+  mode: reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
+  warmup: 2             # compile_with_warmup的预热步数
+  cudagraph: true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+
+# ============ 日志配置 ============
+logger:
+  backend: wandb        # wandb, tensorboard, null
+  project_name: SAC
+  model_name: ContinuousSAC
+  exp_name: Train
+  test_interval: 50_000  # 保存checkpoint间隔
+  log_freq: 10_000      # 日志记录频率（帧数）
+
+# ============ Hydra命令行覆盖示例 ============
+# 使用方法：
+# 1. 修改随机种子：
+#    python train.py seed=123
+#
+# 2. 修改批量大小和学习率：
+#    python train.py buffer.batch_size=1024 optim.lr_actor=1e-4
+#
+# 3. 使用所有GPU：
+#    python train.py collector.gpu_devices=-1
+#
+# 4. 禁用混合精度：
+#    python train.py training.use_amp=false
+#
+# 5. 改变训练设备：
+#    python train.py training.device=cuda:1
+#
+# 6. 组合多个参数：
+#    python train.py seed=42 collector.frames_per_batch=50 compile.enable=false
+#
+# 7. 禁用编译优化进行调试：
+#    python train.py compile.enable=false compile.cudagraph=false
+#
+# 8. 使用更激进的编译模式：
+#    python train.py compile.mode=max-autotune compile.warmup=5
+
+# ============ 性能优化说明 ============
+# 本配置已包含所有性能优化：
+# - torch.set_float32_matmul_precision("high") - 矩阵乘法优化
+# - tensordict pytree优化 - TensorDict性能提升
+# - group_optimizers - 简化优化器管理
+# - compile_with_warmup - 更好的编译优化
+# - GradScaler正确实现 - 混合精度训练
+# - MultiaSyncDataCollector - 同步数据收集（不使用replay_buffer参数）
+# - timeit性能监控 - 详细性能分析
+# - update_priority API - 正确的优先级更新

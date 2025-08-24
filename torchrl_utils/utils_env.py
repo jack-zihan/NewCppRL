@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 from omegaconf import DictConfig
-from torchrl.envs import RewardSum, StepCounter, TransformedEnv, ParallelEnv
+from torchrl.envs import InitTracker, StepCounter, DoubleToFloat, RewardSum, TransformedEnv, ParallelEnv
 import gymnasium as gym
 from torchrl.envs.libs.gym import GymWrapper
 
@@ -52,6 +52,9 @@ def make_env(
             ),
         )
     env = TransformedEnv(env)
-    env.append_transform(RewardSum())
+    env.append_transform(InitTracker())
     env.append_transform(StepCounter())
+    env.append_transform(DoubleToFloat())
+    env.append_transform(RewardSum())
+
     return env

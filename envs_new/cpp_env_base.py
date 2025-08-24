@@ -1,8 +1,8 @@
 """
-模块化的割草机器人环境基础类。
+模块化的割草/覆盖机器人环境基础类。
 
 采用组件化架构设计，提供更好的可维护性、可扩展性和可测试性。
-所有环境变体（v1, v2, v3）都继承此基类。
+所有环境变体（v1, v2, v3, v4）都继承此基类。
 """
 from __future__ import annotations
 
@@ -10,11 +10,8 @@ import gymnasium as gym
 import numpy as np
 from typing import Dict, Tuple, Union, Optional, Any
 
-# pygame依赖已移除，HumanRendering wrapper会处理显示
 
 from envs_new.components.config.environment_config import EnvironmentConfig
-from envs_new.components.entity.agent import AgentFactory
-from envs_new.components.state.environment_state import EnvironmentState
 from envs_new.components.map.map_generator import ScenarioGenerator
 from envs_new.components.observation.observation_generator import ObservationGenerator
 from envs_new.components.dynamics.environment_dynamics import EnvironmentDynamics
@@ -25,7 +22,7 @@ from envs_new.components.render.renderer import Renderer
 
 class CppEnvBase(gym.Env):
     """
-    模块化割草机器人环境。
+    模块化割草/覆盖机器人环境，未来可能拓展到Isaac Agile上去。
     
     核心特性：
     - 可配置的组件系统：场景生成、动力学、观察、奖励、渲染
@@ -42,10 +39,7 @@ class CppEnvBase(gym.Env):
         "render_fps": 50,
     }
 
-    def __init__(self,
-                 render_mode: Optional[str] = None,
-                 **kwargs):
-        # __init__初始化组件、gym观测动作空间
+    def __init__(self,render_mode: Optional[str] = None, **kwargs):
         super().__init__()
 
         # 极简配置创建：直接使用kwargs
@@ -61,17 +55,17 @@ class CppEnvBase(gym.Env):
 
         # Rendering
         self.is_open = True
-        self.render_mode = render_mode
+        self.render_mode = render_mode # 目前只支持 rgb_array, human由warpper实现
 
     def _initialize_components(self) -> None:
         """Initialize all environment components."""
         # 所有组件使用同一配置对象
         self.scenario_generator = ScenarioGenerator(self.config)
 
-        # Action processing
+        # Action processing, 动作解析解耦于动力学之外增加灵活性
         self.action_processor = ActionProcessor(self.config)
 
-        # Environment dynamics
+        # Environment dynamics。
         self.env_dynamics = EnvironmentDynamics(self.config, self.action_processor)
 
         # Observation generation
@@ -79,16 +73,24 @@ class CppEnvBase(gym.Env):
 
         # Reward calculation
         self.reward_system = RewardSystem(self.config)
-        
+
         # Rendering
         self.renderer = Renderer(self.config)
+
+    def _get_observation_channels(self) -> int:
+        """
+        获取观察通道数，子类可重写此方法声明自己的通道数
+        
+        Returns:
+            int: 观察地图的通道数
+        """
+        # 基础环境：field, obstacle, weed, (trajectory)
+        return 3 + int(self.config.use_trajectory)
 
     def _initialize_spaces(self) -> None:
         """Initialize action and observation spaces."""
         if self.config.action_type == "discrete":
-            self.action_space = gym.spaces.Discrete(
-                self.action_processor.get_action_space_size()
-            )
+            self.action_space = gym.spaces.Discrete(self.action_processor.get_action_space_size())
         elif self.config.action_type == "multi_discrete":
             self.action_space = gym.spaces.MultiDiscrete(self.config.action_nvec)
         elif self.config.action_type == "continuous":
@@ -96,34 +98,19 @@ class CppEnvBase(gym.Env):
             self.action_space = gym.spaces.Box(
                 low=np.array([bounds[0][0], bounds[1][0]], dtype=np.float32),
                 high=np.array([bounds[0][1], bounds[1][1]], dtype=np.float32),
-                shape=(2,),
-                dtype=np.float32
-            )
+                shape=(2,), dtype=np.float32)
         else:
             raise ValueError(f"Unsupported action type: {self.config.action_type}")
 
-        # 观察空间初始化为占位符，实际形状在reset后确定
-        self._initialize_observation_space_placeholder()
-
-    def _initialize_observation_space_placeholder(self) -> None:
-        """初始化观察空间占位符，实际形状将在reset时确定"""
-        # 两阶段初始化：先创建placeholder满足gym要求，reset后更新准确值
-        estimated_channels = 3 + self.config.use_trajectory  # 基础估计
-
-        # 计算观察形状
-        obs_shape = self.observation_generator.get_observation_shape(estimated_channels)
+        # 使用声明的通道数而非估算
+        actual_channels = self._get_observation_channels()
+        obs_shape = self.observation_generator.get_observation_shape(actual_channels) # 计算观察形状
 
         self.observation_space = gym.spaces.Dict({
-            "observation": gym.spaces.Box(
-                low=0.0, high=1.0, shape=obs_shape, dtype=np.float32
-            ),
-            "vector": gym.spaces.Box(
-                low=-1.0, high=1.0, shape=(1,), dtype=np.float32
-            ),
-            "weed_ratio": gym.spaces.Box(
-                low=0.0, high=1.0, shape=(1,), dtype=np.float32
-            )
-        })
+            "observation": gym.spaces.Box(low=0.0, high=1.0, shape=obs_shape, dtype=np.float32),
+            "vector": gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
+            "completion_ratio": gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+        }) # 这里还是叫completion_ratio, 这样在未来除了覆盖任务保持统一性
 
     def _update_observation_space(self) -> None:
         """基于实际地图更新观察空间"""
@@ -138,7 +125,7 @@ class CppEnvBase(gym.Env):
         self.observation_space = gym.spaces.Dict({
             "observation": gym.spaces.Box(low=0.0, high=1.0, shape=obs_shape, dtype=np.float32),
             "vector": gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
-            "weed_ratio": gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+            "completion_ratio": gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         })
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[
@@ -149,21 +136,17 @@ class CppEnvBase(gym.Env):
         self.scenario_generator.set_random_generator(self.np_random)
         self.observation_generator.set_random_generator(self.np_random)
 
+        # Generate complete scenario environemnt state (agent, maps, env_state), options参数包含特定的场景生成选项
         options = options or {}
-
-        # Generate complete scenario, dynamics components
         self.agent, self.maps_dict, self.env_state = self.scenario_generator.generate_scenario(
-            map_id=options.get('map_id'),
-            weed_distribution=options.get('weed_distribution', 'uniform'),
-            weed_count=options.get('weed_count', 100),
-            scenario_directory=options.get('specific_scenario_dir'),
-            initial_position=options.get('initial_position'),
-            initial_direction=options.get('initial_direction')
+            map_id=options.get('map_id'), scenario_directory=options.get('specific_scenario_dir'),
+            weed_count=options.get('weed_count', 100), weed_distribution=options.get('weed_distribution', 'uniform'),
+            initial_position=options.get('initial_position'), initial_direction=options.get('initial_direction')
         )
 
         self.env_dynamics.reset(self.agent, self.maps_dict, self.env_state)
 
-        # init observation components
+        # update observation components
         self._update_observation_space()
         observation = self._generate_observation()
 
@@ -172,38 +155,39 @@ class CppEnvBase(gym.Env):
     def step(self, action: Union[int, Tuple]) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         """
         Execute one environment step.
-        
-        Args:
-            action: Action to execute
-            
-        Returns:
-            Tuple of (observation, reward, terminated, truncated, info)
         """
-        # Apply dynamics，动力学包含动作解析其实是可以的，动作解析解耦后动力学的灵活性会比较受限
+        # Apply dynamics， 传入action_type使得action_processor是无状态的函数式模式
         self.agent, self.maps_dict, self.env_state = self.env_dynamics.step(
             self.agent, self.maps_dict, self.env_state, action, self.config.action_type
         )
 
+        # Generate observation
+        observation = self._generate_observation()
+
         # Calculate reward
-        reward = self.reward_system.calculate_reward(self.env_state)
+        reward = self.reward_system.calculate_reward(self.env_state, map_dict=self.maps_dict)
 
         # Check episode termination
         terminated = self.env_state.crashed or self.env_state.finished
         truncated = self.env_state.timeout
 
-        # Generate observation
-        observation = self._generate_observation()
+        # Generate info using extractable method
+        info = self._get_step_info()
 
-        # Additional info
-        info = {
+        return observation, np.array(reward), np.bool_(terminated), truncated, info
+    
+    def _get_step_info(self) -> Dict[str, Any]:
+        """
+        Generate info dictionary for step return.
+        Subclasses can override this to return different information.
+        """
+        return {
             'crashed': self.env_state.crashed,
             'finished': self.env_state.finished,
             'timeout': self.env_state.timeout,
             'weed_count': self.env_state.weed_count,
-            'weed_ratio': self.env_state.weed_completion_ratio
+            'weed_ratio': self.env_state.weed_coverage_ratio
         }
-
-        return observation, np.array(reward), np.bool_(terminated), truncated, info
 
     def _generate_observation(self) -> Dict[str, np.ndarray]:
         """生成观察"""
@@ -228,7 +212,7 @@ class CppEnvBase(gym.Env):
         """
         # 默认实现：返回基础地图，注意obstacle的pad值为1.0（表示边界为障碍物）
         obs_maps = {
-            'field_frontier': {'map': self.maps_dict['field_frontier'], 'pad': 0.0},
+            'field': {'map': self.maps_dict['field'], 'pad': 0.0},
             'obstacle': {'map': self.maps_dict['obstacle'], 'pad': 1.0},  # 边界视为障碍物
             'weed': {'map': self.maps_dict['weed'], 'pad': 0.0}
         }
@@ -246,7 +230,7 @@ class CppEnvBase(gym.Env):
 
     def _get_completion_ratio(self) -> np.ndarray:
         """默认获取杂草完成率"""
-        return np.array([self.env_state.weed_completion_ratio], dtype=np.float32)
+        return np.array([self.env_state.weed_coverage_ratio], dtype=np.float32)
 
     def render(self) -> Optional[np.ndarray]:
         """
@@ -266,9 +250,7 @@ class CppEnvBase(gym.Env):
         render_mode = "first_person" if self.config.render_first_person else "map"
 
         return self.renderer.render(
-            self.maps_dict,
-            self.agent,
-            self.env_state.dimensions,
+            self.maps_dict, self.agent, self.env_state.dimensions,
             mode=render_mode,
             observation_size=self.config.state_size if render_mode == "first_person" else None
         )
@@ -286,18 +268,12 @@ class CppEnvBase(gym.Env):
         return self.env_state
 
     def update_config(self, new_config: Dict[str, Any]) -> None:
-        """
-        Update environment configuration dynamically.
-        
-        Args:
-            new_config: New configuration values
-        """
-        # 动态更新config对象的属性
-        # 由于所有组件都持有config的引用，更新会自动传播
+        """Update environment configuration dynamically."""
+        # 动态更新config对象的属性, 由于所有组件都持有config的引用，更新会自动传播
         for key, value in new_config.items():
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
-        
+
         # 对于需要特殊处理的配置，保留兼容性
         if 'reward_coefficients' in new_config:
             self.reward_system.update_coefficients(new_config['reward_coefficients'])
@@ -324,7 +300,7 @@ if __name__ == "__main__":
     obs, info = env.reset()
     print(f"Observation shape: {obs['observation'].shape}")
     print(f"Vector shape: {obs['vector'].shape}")
-    print(f"Weed ratio: {obs['weed_ratio']}")
+    print(f"Weed ratio: {obs['completion_ratio']}")
 
     for _ in range(10):
         action = env.action_space.sample()

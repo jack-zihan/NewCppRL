@@ -84,3 +84,43 @@ __all__ = [
     'ObservationGenerator',
     'ScenarioGenerator',
 ]
+
+# ====================================================================
+# Gymnasium Registration for new environments
+# --------------------------------------------------------------------
+import gymnasium.envs.registration
+
+# Register v1-v5 environments with new IDs to avoid conflicts
+gymnasium.envs.registration.register(
+    id="NewPasture-v1",
+    entry_point="envs_new.cpp_env_v1:CppEnv",
+)
+
+gymnasium.envs.registration.register(
+    id="NewPasture-v2",
+    entry_point="envs_new.cpp_env_v2:CppEnv",
+)
+
+gymnasium.envs.registration.register(
+    id="NewPasture-v3",
+    entry_point="envs_new.cpp_env_v3:CppEnv",
+)
+
+# Import v4 and v5 from their respective modules
+try:
+    from envs_new.cpp_env_v4 import CppEnv as CppEnvV4
+    gymnasium.envs.registration.register(
+        id="NewPasture-v4",
+        entry_point="envs_new.cpp_env_v4:CppEnv",
+    )
+except ImportError:
+    pass  # v4 might not exist in all configurations
+
+try:
+    from envs_new.cpp_env_v5 import CppEnv as CppEnvV5
+    gymnasium.envs.registration.register(
+        id="NewPasture-v5",
+        entry_point="envs_new.cpp_env_v5:CppEnv",
+    )
+except ImportError:
+    pass  # v5 might not exist in all configurations

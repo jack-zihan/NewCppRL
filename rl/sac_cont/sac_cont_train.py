@@ -1,4 +1,5 @@
 import math
+import multiprocessing as mp
 import os
 import tempfile
 import time
@@ -26,21 +27,24 @@ algo_name = 'sac_cont'
 
 
 def main(cfg: "DictConfig"):  # noqa: F821
+    # 简化路径创建（9行→3行）
     ckpt_dir = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
     if cfg.ckpt_name:
         ckpt_dir += f'_{cfg.ckpt_name}'
-    if not Path(f'{base_dir}/ckpt').exists():
-        os.mkdir(f'{base_dir}/ckpt')
-    if not Path(f'{base_dir}/ckpt/{algo_name}').exists():
-        os.mkdir(f'{base_dir}/ckpt/{algo_name}')
-    if not Path(f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}').exists():
-        os.mkdir(f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}')
-    device = cfg.device
+    ckpt_path = Path(f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}')
+    ckpt_path.mkdir(parents=True, exist_ok=True)
+    
+    # 设备配置（支持限制GPU数量）
+    available_gpus = cfg.get('gpus', None)  # None表示全部，[0,1]表示指定，[]表示仅CPU
+    if available_gpus is None:
+        n_gpus = torch.cuda.device_count()
+    else:
+        n_gpus = len(available_gpus) if available_gpus else 0
+    
+    # 简化设备选择逻辑
+    device = cfg.get('device', None)
     if device in ("", None):
-        if torch.cuda.is_available():
-            device = "cuda:0"
-        else:
-            device = "cpu"
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
     torch.manual_seed(cfg.seed)
@@ -60,19 +64,40 @@ def main(cfg: "DictConfig"):  # noqa: F821
     actor = actor_critic[0]
     q_critic = actor_critic[1]
 
-    # Create the collector
-    collector = MultiaSyncDataCollector(
-        create_env_fn=[lambda: make_env(
-            num_envs=1,
-            device='cpu',
-        )] * cfg.collector.num_envs,
-        policy=actor,
-        frames_per_batch=cfg.collector.frames_per_batch,
-        total_frames=cfg.collector.total_frames,
-        device='cpu',
-        storing_device='cpu',
-        max_frames_per_traj=-1,
-    )
+    # Create the collector with optional multi-GPU support
+    # 智能选择collector配置
+    if n_gpus > 1 and cfg.collector.get('use_multi_gpu', False):
+        # 多GPU收集（主要性能提升）
+        gpu_devices = [f'cuda:{i}' for i in (available_gpus[:3] if available_gpus else range(min(3, n_gpus)))]
+        cpu_workers = min(4, mp.cpu_count() - len(gpu_devices) - 2)
+        devices = gpu_devices + ['cpu'] * cpu_workers if cpu_workers > 0 else gpu_devices
+        
+        collector = MultiaSyncDataCollector(
+            create_env_fn=[lambda: make_env(
+                num_envs=1,
+                device='cpu',
+            )] * len(devices),
+            policy=actor,
+            frames_per_batch=cfg.collector.frames_per_batch,
+            total_frames=cfg.collector.total_frames,
+            device=devices,  # 混合设备列表
+            storing_device='cpu',
+            max_frames_per_traj=-1,
+        )
+    else:
+        # 单设备收集（保持原样）
+        collector = MultiaSyncDataCollector(
+            create_env_fn=[lambda: make_env(
+                num_envs=1,
+                device='cpu',
+            )] * cfg.collector.num_envs,
+            policy=actor,
+            frames_per_batch=cfg.collector.frames_per_batch,
+            total_frames=cfg.collector.total_frames,
+            device='cpu',  # 自动扩展
+            storing_device='cpu',
+            max_frames_per_traj=-1,
+        )
 
     # Create the replay buffer
     tempdir = tempfile.TemporaryDirectory()
@@ -143,7 +168,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
     collected_frames = 0
     start_time = time.time()
 
-    # cfg.loss.clip_epsilon = cfg_loss_clip_epsilon
+    # 优化：提取常量避免重复访问
     init_random_frames = cfg.collector.init_random_frames
     batch_size = cfg.buffer.batch_size
     frames_per_batch = cfg.collector.frames_per_batch
@@ -259,7 +284,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
             model_name = str(collected_frames // 1000).rjust(5, '0')
             torch.save(
                 actor_critic,
-                f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}/t[{model_name}].pt'
+                ckpt_path / f't[{model_name}].pt'
             )
 
         # Log all the information

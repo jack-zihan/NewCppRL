@@ -43,45 +43,40 @@ class Updater:
         pass
 
 
-class FrontierUpdater(Updater):
+class FieldExplorationUpdater(Updater):
     """
-    前沿区域探索状态更新器 - 跟踪未探索区域的变化。
+    田地探索更新器 - 使用视野探开未知区域（雾战争模式）
     
-    更新逻辑：使用椭圆扇形表示机器人视野，将探索过的区域标记为已知。
-    计算前沿变化度(TV)用于评估前沿复杂度。
+    更新逻辑：使用椭圆扇形表示机器人视野，将覆盖过的区域标记为已探索。
+    计算田地变化度(TV)用于评估田地复杂度。
     """
 
     def setup_state(self, state: Dict[str, Any], history_length: int = 2) -> None:
         """初始化状态变量"""
-        initial_area = int(state['maps_dict']['field_frontier'].sum())
-        initial_tv = total_variation(state['maps_dict']['field_frontier'].astype(np.int32))
+        initial_area = int(state['maps_dict']['field'].sum())
+        initial_tv = total_variation(state['maps_dict']['field'].astype(np.int32))
 
-        state['env_state'].add_state_info('frontier_area', history_length, initial_area)
-        state['env_state'].add_state_info('frontier_variation', history_length, initial_tv)
+        state['env_state'].add_state_info('field_area', history_length, initial_area)
+        state['env_state'].add_state_info('field_variation', history_length, initial_tv)
 
     def update(self, state: Dict[str, Any]) -> None:
-        """更新前沿地图并记录状态变化"""
-        maps_dict = state['maps_dict']
-        agent = state['agent']
-        env_state = state['env_state']
+        """更新田地地图并记录状态变化"""
+        maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
 
-        # 使用椭圆扇形模拟机器人视野，将探索过的区域设为0（已知）
-        if 'field_frontier' in maps_dict:
-            cv2.ellipse(
-                img=maps_dict['field_frontier'],
+        # 使用椭圆桇形模拟机器人视野，将覆盖过的区域设为0（已覆盖）
+        if 'field' in maps_dict:
+            cv2.ellipse(img=maps_dict['field'],
                 center=agent.position_discrete,  # 椭圆中心：机器人位置
                 axes=(int(agent.vision_length), int(agent.vision_length)),  # 长短轴：视野范围
                 angle=float(agent.direction),  # 旋转角度：机器人朝向
-                startAngle=float(-agent.vision_angle / 2),  # 扇形起始角
-                endAngle=float(agent.vision_angle / 2),  # 扇形结束角
-                color=(0,),  # 填充为0（已探索）
-                thickness=-1  # -1表示实心填充
+                startAngle=float(-agent.vision_angle / 2), endAngle=float(agent.vision_angle / 2),  # 扇形起始角和结束角
+                color=(0,),  thickness=-1  # 填充为0（已覆盖，-1表示实心填充
             )
 
             # 记录状态变化
-            new_frontier_area = int(maps_dict['field_frontier'].sum())
-            new_frontier_variation = total_variation(maps_dict['field_frontier'].astype(np.int32))
-            env_state.update_state(frontier_area=new_frontier_area, frontier_variation=new_frontier_variation)
+            new_field_area = int(maps_dict['field'].sum())
+            new_field_variation = total_variation(maps_dict['field'].astype(np.int32))
+            env_state.update_state(field_area=new_field_area, field_variation=new_field_variation)
 
 
 class WeedUpdater(Updater):
@@ -97,9 +92,7 @@ class WeedUpdater(Updater):
 
     def update(self, state: Dict[str, Any]) -> None:
         """更新杂草地图并记录状态变化"""
-        maps_dict = state['maps_dict']
-        agent = state['agent']
-        env_state = state['env_state']
+        maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
 
         # 使用凸包填充算法清除机器人覆盖区域内的杂草
         if 'weed' in maps_dict:
@@ -109,6 +102,29 @@ class WeedUpdater(Updater):
             # 记录状态变化
             new_weed_count = int(maps_dict['weed'].sum())
             env_state.update_state(weed_count=new_weed_count)
+
+
+class FieldCoverageUpdater(FieldExplorationUpdater):
+    """
+    田地覆盖更新器 - 使用机器人本体覆盖工作区域
+    
+    继承自FieldExplorationUpdater，复用setup_state方法
+    重写update方法使用机器人本体（凸包）进行覆盖
+    """
+    
+    def update(self, state: Dict[str, Any]) -> None:
+        """使用机器人本体覆盖田地（类似除草机制）"""
+        maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
+        
+        # 使用凸包填充算法，机器人本体覆盖的区域标记为已覆盖
+        if 'field' in maps_dict:
+            convex_hull = agent.convex_hull.round().astype(np.int32)
+            cv2.fillPoly(maps_dict['field'], [convex_hull], color=(0,))  # 0表示已覆盖
+            
+            # 记录状态变化
+            new_field_area = int(maps_dict['field'].sum())
+            new_field_variation = total_variation(maps_dict['field'].astype(np.int32))
+            env_state.update_state(field_area=new_field_area, field_variation=new_field_variation)
 
 
 class AgentUpdater(Updater):
@@ -126,30 +142,23 @@ class AgentUpdater(Updater):
 
     def update(self, state: Dict[str, Any]) -> None:
         """更新agent状态信息"""
-        agent = state['agent']
-        env_state = state['env_state']
+        agent, env_state = state['agent'], state['env_state']
 
         # 记录agent状态变化（添加direction）
         env_state.update_state(agent_position=agent.position, agent_direction=agent.direction,
                                agent_speed=agent.speed, agent_steer=agent.steer)
-
         # 更新轨迹长度
         agent_pos_info = env_state.get_info('agent_position')
         if agent_pos_info and len(agent_pos_info) >= 2:
             distance = np.linalg.norm(np.array(agent_pos_info.current) - np.array(agent_pos_info.last))
             env_state.update_state(trajectory_length=env_state.trajectory_length + distance)
 
-        # 设置当前转向供奖励计算使用
-        env_state.agent_steer = agent.last_steer
-
-
 class MistUpdater(Updater):
     """雾效地图更新器"""
 
     def update(self, state: Dict[str, Any]) -> None:
         """更新雾效地图可见性"""
-        maps_dict = state['maps_dict']
-        agent = state['agent']
+        maps_dict, agent = state['maps_dict'], state['agent']
 
         if 'mist' in maps_dict:
             # 在agent当前视野范围内清除雾效（设为1表示已探索）
@@ -188,6 +197,11 @@ class WeedTaskStatusUpdater(Updater):
     def setup_state(self, state: Dict[str, Any], history_length: int = 2) -> None:
         """初始化所有状态标志"""
         env_state = state['env_state']
+        
+        # 从config设置max_steps到static_info（负责timeout检查，所以在这里设置）
+        if 'config' in state:
+            env_state.set_static_info('max_steps', state['config'].max_episode_steps)
+        
         env_state.add_state_info('current_step', history_length, -1)
         env_state.add_state_info('crashed', history_length, False)
         env_state.add_state_info('finished', history_length, False)
@@ -203,7 +217,7 @@ class WeedTaskStatusUpdater(Updater):
         finished = env_state.finished or env_state.crashed or timeout or self._is_task_finished(state)
 
         # 统一更新所有状态标志
-        env_state.update_state( current_step=current_step, finished=finished, timeout=timeout)
+        env_state.update_state(current_step=current_step, finished=finished, timeout=timeout)
 
     def _is_task_finished(self, state: Dict[str, Any]):
         """判断任务是否完成"""
@@ -213,11 +227,11 @@ class WeedTaskStatusUpdater(Updater):
 class FieldTaskStatusUpdater(WeedTaskStatusUpdater):
     @classmethod
     def get_dependencies(cls) -> List[str]:
-        return ['frontier']  # 依赖frontier计数来判断任务完成
+        return ['field']  # 依赖field计数来判断任务完成
 
     def _is_task_finished(self, state: Dict[str, Any]):
         """判断任务是否完成"""
-        return state["env_state"].frontier_area == 0
+        return state["env_state"].field_area == 0
 
 
 class EnvironmentDynamics:
@@ -232,12 +246,13 @@ class EnvironmentDynamics:
 
     # 所有可用的updater组件
     AVAILABLE_UPDATERS = {
-        'frontier': FrontierUpdater,
+        'field': FieldExplorationUpdater,  # 默认：视野探索模式（除草任务）
         'weed': WeedUpdater,
         'agent': AgentUpdater,
         'mist': MistUpdater,
         'trajectory': TrajectoryUpdater,
-        'status': WeedTaskStatusUpdater  # 合并了原来的flags和step
+        'status': WeedTaskStatusUpdater,  # 合并了原来的flags和step
+        # 'field_status': FieldTaskStatusUpdater  # 田地覆盖任务判定（v4手动替换）
     }
 
     def __init__(self, config: EnvironmentConfig, action_processor: ActionProcessor,
@@ -322,7 +337,8 @@ class EnvironmentDynamics:
         state = {
             'maps_dict': maps_dict,
             'agent': agent,
-            'env_state': env_state
+            'env_state': env_state,
+            'config': self.config  # 传递config以供updater使用
         }
 
         # 初始化所有updater的状态（传递state而不是只有env_state）

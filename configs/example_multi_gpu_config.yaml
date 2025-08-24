@@ -1,0 +1,62 @@
+# 多GPU训练配置示例
+# 这是使用优化后SAC训练代码的示例配置
+
+# ====================
+# 示例1：使用所有可用GPU（6x RTX 3090）
+# ====================
+example1_all_gpus:
+  collector:
+    gpu_devices: -1  # 使用所有GPU
+    processes_per_gpu: 2  # 每个GPU运行2个进程
+    cpu_workers: null  # 不使用CPU工作进程
+    # 总进程数 = 6 GPUs * 2 processes = 12个并行环境
+
+# ====================
+# 示例2：指定GPU训练
+# ====================
+example2_specific_gpus:
+  collector:
+    gpu_devices: [0, 1, 2]  # 只使用前3个GPU
+    processes_per_gpu: 3  # 每个GPU运行3个进程
+    cpu_workers: null
+    # 总进程数 = 3 GPUs * 3 processes = 9个并行环境
+
+# ====================
+# 示例3：纯CPU训练
+# ====================
+example3_cpu_only:
+  collector:
+    gpu_devices: null  # 不使用GPU
+    processes_per_gpu: null
+    cpu_workers: 16  # 使用16个CPU进程
+    # 总进程数 = 16个CPU进程
+
+# ====================
+# 示例4：GPU+CPU混合模式
+# ====================
+example4_hybrid:
+  collector:
+    gpu_devices: [0, 1]  # 使用2个GPU
+    processes_per_gpu: 2  # 每个GPU 2个进程
+    cpu_workers: 8  # 额外8个CPU进程
+    # 总进程数 = 2*2 + 8 = 12个并行环境
+
+# ====================
+# 示例5：最大化资源利用
+# ====================
+example5_maximize:
+  collector:
+    gpu_devices: -1  # 使用所有GPU
+    processes_per_gpu: 2
+    cpu_workers: -1  # 最大化CPU（自动计算）
+    # 总进程数 = 所有GPU*2 + (CPU核心数-2)
+
+# ====================
+# 示例6：向后兼容模式
+# ====================
+example6_backward_compatible:
+  collector:
+    # 不设置新参数，使用原始num_envs
+    num_envs: 32
+    # gpu_devices, processes_per_gpu, cpu_workers都为null
+    # 行为与原始代码相同

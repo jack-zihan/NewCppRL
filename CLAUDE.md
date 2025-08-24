@@ -1,6 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+运行环境是 new_venv/bin/activate, 而不是venv/bin/activate
 
 ## Repository Overview
 
@@ -313,6 +314,127 @@ Claude should regularly:
 3. **过度工程化**：不要一开始就追求"完美的可扩展性"。先解决当前问题，再考虑未来扩展。
 4. **API复杂化**：不要为了"功能完整"而创建复杂的API。简单易用的API胜过功能丰富的复杂API。
 
+### 🔍 如何识别并消除过度工程化（实战经验）
+
+#### 核心识别方法：三问法则
+每当你设计或审查代码时，问自己三个问题：
+
+1. **业务本质问题**："这个功能的本质需求是什么？"
+   - 剥离所有技术实现，只看业务需要什么
+   - 如果一句话说不清楚，说明理解还不够深入
+
+2. **数据流向问题**："数据从哪里来，到哪里去？"
+   - 追踪数据的完整路径
+   - 如果中间有多次转换或存储，问"为什么需要这一步？"
+
+3. **简化可能问题**："能否直接从A到B，而不经过C？"
+   - 识别所有中间层
+   - 挑战每个中间层的必要性
+
+#### 实战案例：奖励系统优化全过程
+
+**案例1：消除不必要的映射层**
+```python
+  # ❌ 过度工程化：多层映射
+  class RewardSystem:
+      COEFFICIENT_MAPPING = {
+          'turn_gap': 'reward_turn_gap_coef',  # 第一层映射
+          'turn_direction': 'reward_turn_direction_coef'
+      }
+
+      def _update_coefficients(self):
+          for internal_name, config_name in self.COEFFICIENT_MAPPING.items():
+              calc_name = self.CALC_MAPPING[internal_name]  # 第二层映射
+              calc_class = self.CALCULATORS[calc_name]  # 第三层映射
+              calc_class.coefficient = getattr(self.config, config_name)
+
+  # ✅ 本质思考后：直接访问
+  class RewardSystem:
+      def calculate_reward(self):
+          # 直接使用统一命名，无需映射
+          coefficient = getattr(self.config, f"reward_{name}", 0.0)
+  识别要点：当你发现自己在维护映射关系时，问"为什么不直接访问？"
+  ```
+
+案例2：消除不必要的状态存储
+```
+  # ❌ 过度工程化：重复存储
+  class Calculator:
+      coefficient = 0.0  # 类变量存储
+  
+      @classmethod
+      def calculate(cls, env_state):
+          return cls.coefficient * value  # 使用存储的值
+  
+  # 在RewardSystem中
+  def _update_coefficients(self):
+      Calculator.coefficient = self.config.coefficient  # 同步更新
+  
+  # ✅ 本质思考后：直接传递
+  class Calculator:
+      @classmethod
+      def calculate(cls, env_state, coefficient):  # 作为参数传递
+          return coefficient * value  # 直接使用参数
+  识别要点：当你需要"同步"两处数据时，问"为什么要存两份？"
+```
+案例3：消除不必要的间接访问
+```
+  # ❌ 过度工程化：隐式传递+辅助方法
+  def calculate(cls, env_state, coefficient, **kwargs):
+      config = cls.get_config(kwargs)  # 辅助方法提取
+      if not config:
+          return 0.0
+
+  @classmethod
+  def get_config(cls, kwargs):
+      return kwargs.get('config')  # 从kwargs提取
+
+  # ✅ 本质思考后：显式参数
+  def calculate(cls, env_state, coefficient, config=None):
+      if not config:
+          return 0.0  # 直接使用参数
+  识别要点：当你创建"辅助方法"来访问数据时，问"为什么不直接传递？"
+ ```
+
+危险信号清单（Red Flags）
+
+出现以下情况时，立即停下来重新思考：
+
+1. 命名困难：想不出好名字，或名字很长很绕
+  - 可能是抽象层次错误
+2. 多层映射：A→B→C→D的转换链
+  - 考虑直接A→D
+3. 同步负担：需要保持多处数据一致
+  - 使用单一数据源
+4. 配置地狱：大量配置才能使用
+  - 简化接口，提供合理默认值
+5. 理解成本高：需要看多个文件才能理解一个功能
+  - 减少抽象层次
+6. 修改困难：简单需求需要改动多处
+  - 重新组织代码结构
+
+实践指南：逐步简化法
+
+当你怀疑存在过度工程化时，按以下步骤操作：
+
+1. 画出数据流图
+  - 标记所有数据转换点
+  - 识别冗余路径
+2. 列出所有假设
+  - "未来可能需要..."
+  - "为了灵活性..."
+  - 挑战每个假设的必要性
+3. 尝试删除
+  - 临时注释掉可疑的抽象层
+  - 看是否能直接连接两端
+  - 如果可以，永久删除
+4. 重写对比
+  - 用最简单的方式重写
+  - 对比代码行数和复杂度
+  - 选择更简单的版本
+
+记住：优秀的设计让人感叹"原来这么简单"，而非"好复杂的架构"
+
 ### 🎯 核心设计原则（优先级排序）
 
 #### 第一优先级：实用主义导向
@@ -374,11 +496,13 @@ Claude should regularly:
 
 每次设计决策时，按顺序问以下问题：
 
-1. **必要性检查**："这个改动必要吗？这对代码的可维护性、简洁性和清晰性是否有必要的帮助？"
+0. **本质识别**："剥离所有技术细节，这个功能到底在做什么？" [新增]
+1. **必要性检查**："这个改动必要吗？..."
 2. **简洁性评估**："最简单但优雅高效的解决方案是什么？"
 3. **理解性测试**："其他人能在5分钟内理解这个设计吗？"
 4. **影响面评估**："这个改动会影响多少现有代码？"
 5. **维护性预测**："6个月后维护这段代码困难吗？"
+6. **简化可能**："还能更简单吗？哪些是真正必要的？" [新增]
 
 ### 🎨 代码美学标准
 
@@ -398,6 +522,22 @@ Claude should regularly:
 
 优秀的代码应该让人看完后感叹："原来可以这么简单！"而不是"这个设计真复杂！"
 但是应该注意"简单” 指的是指的是可维护性、简洁性、效率和清晰性的综合考量，可以不用需要害怕过度工程化变得过于保守，过度工程化的真正定义：大量代码实现简单效果，而不是使用高效的工具， 使用成熟、高效的库函数是明智的，不是过度工程化。
+**真实案例对比**：
+
+```python
+  # ❌ 让人皱眉的设计
+  "这个RewardSystem为什么要三层映射？"
+  "为什么coefficient要存在类变量里？"
+  "get_config这个方法是干什么的？"
+
+  # ✅ 让人赞叹的设计
+  "哦，直接传参数就行了！"
+  "原来奖励就是系数乘以变化量！"
+  "代码和业务逻辑完全一致，真清晰！"
+
+  这些添加内容基于我们的实战经验，提供了具体的识别方法、真实案例和实践指南，能帮助未来更好地避免过度工程
+  化，真正实现"Less is More"的设计理念。
+ ```
 
 **成功的标志**：
 - 用户说："这个设计很自然"

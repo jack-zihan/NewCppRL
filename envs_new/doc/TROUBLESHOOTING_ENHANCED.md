@@ -148,7 +148,7 @@ for component, value in breakdown.items():
 #   total: -0.3500
 #   base: -0.1000
 #   weed_removal: 0.0000
-#   frontier_coverage: 0.2500
+#   field_coverage: 0.2500
 #   turning_penalty: -0.5000
 #   collision_penalty: 0.0000
 
@@ -292,7 +292,7 @@ def visualize_apf_fields(env):
     if hasattr(env, 'obs_apf') and env.obs_apf is not None:
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         
-        titles = ['Frontier APF', 'Mist Inv', 'Obstacle APF', 
+        titles = ['Field APF', 'Mist Inv', 'Obstacle APF', 
                  'Weed APF', 'Trajectory APF', 'Combined']
         
         for i, (ax, title) in enumerate(zip(axes.flat, titles)):

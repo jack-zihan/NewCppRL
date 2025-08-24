@@ -1,4 +1,5 @@
 import math
+import multiprocessing as mp
 import os
 import tempfile
 import time
@@ -26,15 +27,12 @@ algo_name = 'sac_cont'
 
 
 def main(cfg: "DictConfig"):  # noqa: F821
+    # 简化路径创建（9行→3行）
     ckpt_dir = time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime())
     if cfg.ckpt_name:
         ckpt_dir += f'_{cfg.ckpt_name}'
-    if not Path(f'{base_dir}/ckpt').exists():
-        os.mkdir(f'{base_dir}/ckpt')
-    if not Path(f'{base_dir}/ckpt/{algo_name}').exists():
-        os.mkdir(f'{base_dir}/ckpt/{algo_name}')
-    if not Path(f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}').exists():
-        os.mkdir(f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}')
+    ckpt_path = Path(f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}')
+    ckpt_path.mkdir(parents=True, exist_ok=True)
     device = cfg.device
     if device in ("", None):
         if torch.cuda.is_available():
@@ -60,16 +58,39 @@ def main(cfg: "DictConfig"):  # noqa: F821
     actor = actor_critic[0]
     q_critic = actor_critic[1]
 
-    # Create the collector
+    # Create the collector with smart GPU/CPU configuration
+    # 智能收集器配置
+    devices = []
+    
+    # GPU配置
+    gpu_devices = cfg.collector.get('gpu_devices', None)
+    if gpu_devices is not None:
+        if gpu_devices == -1:  # -1表示使用所有GPU
+            gpu_devices = list(range(torch.cuda.device_count()))
+        processes_per_gpu = cfg.collector.get('processes_per_gpu', 1)
+        for gpu_id in gpu_devices:
+            devices.extend([f'cuda:{gpu_id}'] * processes_per_gpu)
+    
+    # CPU配置
+    cpu_workers = cfg.collector.get('cpu_workers', None)
+    if cpu_workers is not None:
+        if cpu_workers == -1:  # -1表示最大化使用CPU
+            cpu_workers = mp.cpu_count() - 2  # 保留2个核心给系统
+        devices.extend(['cpu'] * cpu_workers)
+    
+    # 如果没有配置，使用原始的num_envs
+    if not devices:
+        devices = ['cpu'] * cfg.collector.get('num_envs', 32)
+    
     collector = MultiaSyncDataCollector(
         create_env_fn=[lambda: make_env(
             num_envs=1,
             device='cpu',
-        )] * cfg.collector.num_envs,
+        )] * len(devices),
         policy=actor,
         frames_per_batch=cfg.collector.frames_per_batch,
         total_frames=cfg.collector.total_frames,
-        device='cpu',
+        device=devices,  # 传入设备列表
         storing_device='cpu',
         max_frames_per_traj=-1,
     )
@@ -261,7 +282,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
             model_name = str(collected_frames // 1000).rjust(5, '0')
             torch.save(
                 actor_critic,
-                f'{base_dir}/ckpt/{algo_name}/{ckpt_dir}/t[{model_name}].pt'
+                ckpt_path / f't[{model_name}].pt'
             )
 
         # Log all the information

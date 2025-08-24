@@ -143,8 +143,7 @@ class MowerAgent(Agent):
 
         # Calculate position change using updated direction
         rad = math.radians(self._direction)
-        dx = speed * math.cos(rad)
-        dy = speed * math.sin(rad)
+        dx, dy = speed * math.cos(rad), speed * math.sin(rad)
 
         self._x += dx
         self._y += dy
@@ -170,12 +169,10 @@ class AgentFactory:
 
     @staticmethod
     def create_mower_agent(config: EnvironmentConfig,
-                           position: Tuple[float, float] = (0.0, 0.0),
-                           direction: float = 0.0) -> MowerAgent:
+                           position: Tuple[float, float] = (0.0, 0.0), direction: float = 0.0) -> MowerAgent:
         return MowerAgent(config, position, direction)
 
     @staticmethod
     def create_real_agent(config: EnvironmentConfig,
-                          position: Tuple[float, float] = (0.0, 0.0),
-                          direction: float = 0.0) -> RealAgent:
+                          position: Tuple[float, float] = (0.0, 0.0), direction: float = 0.0) -> RealAgent:
         return RealAgent(config, position, direction)

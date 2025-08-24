@@ -7,15 +7,15 @@ import cv2
 import numpy as np
 from typing import Dict, Tuple, Optional
 
-from envs_new.components.config.environment_config import EnvironmentConfig
 from envs_new.components.entity.agent import Agent
 from envs_new.utils.image_utils import enlarge_map_features, extract_ego_patch
+from envs_new.components.config.environment_config import EnvironmentConfig
 
 # 渲染颜色配置
 RENDER_COLORS = {
     'background': (255, 255, 255),
-    'field_frontier': (76, 187, 23),
-    'covered_farmland': (112, 173, 7),
+    'field': (76, 187, 23),
+    'covered_field': (112, 173, 7),
     'obstacle': (30, 75, 130),
     'obstacle_edge': (47, 82, 143),
     'weed_undiscovered': (0, 0, 0),
@@ -28,7 +28,7 @@ RENDER_COLORS = {
 }
 
 # 渲染透明度配置
-COVERED_FARMLAND_ALPHA = 0.25  # 已覆盖农田的透明度
+COVERED_FIELD_ALPHA = 0.25  # 已覆盖田地的透明度
 COVERED_WEED_ALPHA = 0.1  # 已清除杂草的透明度
 MIST_EFFECT_ALPHA = 0.7  # 迷雾效果强度
 
@@ -76,21 +76,17 @@ class Renderer:
 
         # 渲染顺序：从底层到顶层（背景→地形→物体→智能体→效果）
 
-        # 渲染field frontier
-        if 'field_frontier' in maps_dict:
-            rendered_map[maps_dict['field_frontier'].astype(bool)] = RENDER_COLORS['field_frontier']
+        # 渲染field
+        if 'field' in maps_dict:
+            rendered_map[maps_dict['field'].astype(bool)] = RENDER_COLORS['field']
 
-        # 渲染covered farmland
-        if (self.config.render_covered_farmland and
-                'original_field_frontier' in maps_dict and
-                'field_frontier' in maps_dict):
+        # 渲染covered field
+        if (self.config.render_covered_field and ('original_field' in maps_dict) and ('field' in maps_dict)):
 
-            covered_mask = np.logical_and(maps_dict['original_field_frontier'],
-                                          np.logical_not(maps_dict['field_frontier']))
+            covered_mask = np.logical_and(maps_dict['original_field'], np.logical_not(maps_dict['field']))
             if covered_mask.any():
-                rendered_map[covered_mask] = (COVERED_FARMLAND_ALPHA * np.array(RENDER_COLORS['covered_farmland']) +
-                                              (1 - COVERED_FARMLAND_ALPHA) * rendered_map[covered_mask]
-                                              ).astype(np.uint8)
+                rendered_map[covered_mask] = (COVERED_FIELD_ALPHA * np.array(RENDER_COLORS['covered_field']) +
+                                              (1 - COVERED_FIELD_ALPHA) * rendered_map[covered_mask]).astype(np.uint8)
 
         # 渲染agent vision（调整顺序：先于obstacles，与旧版一致）
         cv2.ellipse(img=rendered_map, center=agent.position_discrete, angle=agent.direction,
@@ -126,13 +122,13 @@ class Renderer:
         """渲染不同状态的杂草"""
         weed_map = maps_dict['weed']
 
-        if 'field_frontier' in maps_dict:
-            # 未发现的杂草（在frontier区域内）, enlarge_map_features：将1像素的杂草扩大，使其在视觉上更明显
-            weed_undiscovered = enlarge_map_features(np.logical_and(weed_map, maps_dict['field_frontier']))
+        if 'field' in maps_dict:
+            # 未发现的杂草（在未覆盖田地区域内）, enlarge_map_features：将1像素的杂草扩大，使其在视觉上更明显
+            weed_undiscovered = enlarge_map_features(np.logical_and(weed_map, maps_dict['field']))
             rendered_map[weed_undiscovered] = RENDER_COLORS['weed_undiscovered']
 
-            # 已发现的杂草（不在frontier区域内）
-            weed_discovered = enlarge_map_features(np.logical_and(weed_map, np.logical_not(maps_dict['field_frontier'])))
+            # 已发现的杂草（在已覆盖田地区域内）
+            weed_discovered = enlarge_map_features(np.logical_and(weed_map, np.logical_not(maps_dict['field'])))
             rendered_map[weed_discovered] = RENDER_COLORS['weed_discovered']
         else:
             # 所有杂草都作为已发现处理

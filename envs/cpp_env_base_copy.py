@@ -620,7 +620,7 @@ class CppEnvBase(gym.Env):
 
     # def load_maps_from_directory(self, directory: Union[str, Path]):
     #     directory = Path(directory)
-    #     self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+    #     self.map_frontier = (cv2.imread(str(directory / 'map_field.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
     #     self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
     #     self.map_weed = (cv2.imread(str(directory / 'map_weed.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
     #     self.map_weed[self.map_frontier == 0] = 0 # 只有map_frontier存在的地方weed才可能存在
@@ -633,7 +633,7 @@ class CppEnvBase(gym.Env):
 
     def load_maps_from_directory(self, directory: Union[str, Path]): # 之前就没有将边界加上地图的
         directory = Path(directory)
-        self.map_frontier = (cv2.imread(str(directory / 'map_frontier.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
+        self.map_frontier = (cv2.imread(str(directory / 'map_field.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
         self.map_obstacle = (cv2.imread(str(directory / 'map_obstacle.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
         self.map_weed = (cv2.imread(str(directory / 'map_weed.png'), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8)
 

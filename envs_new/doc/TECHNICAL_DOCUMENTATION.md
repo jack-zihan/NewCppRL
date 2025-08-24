@@ -399,8 +399,8 @@ class EnvironmentState:
 | `agent_steer` | float | 2 | 转向角速度(度/步) | 每步更新 |
 | `agent_speed` | float | 2 | 线速度(像素/步) | 每步更新 |
 | `weed_count` | int | 2 | 剩余杂草数量 | 清除杂草时更新 |
-| `frontier_area` | int | 2 | 未探索区域面积 | 探索新区域时更新 |
-| `frontier_variation` | int | 2 | 前沿边界复杂度 | 每步计算 |
+| `field_area` | int | 2 | 田地剩余面积 | 覆盖田地时更新 |
+| `field_variation` | int | 2 | 田地边界复杂度 | 每步计算 |
 | `crashed` | bool | 2 | 是否碰撞 | 碰撞检测后更新 |
 | `finished` | bool | 2 | 任务是否完成 | 杂草清完时置True |
 | `timeout` | bool | 2 | 是否超时 | 步数达到上限时置True |
@@ -452,7 +452,7 @@ class EnvironmentDynamics:
     
     AVAILABLE_UPDATERS = {
         'agent': AgentUpdater,           # 无依赖 - 最先执行
-        'frontier': FrontierUpdater,     # 无依赖 - 更新探索区域
+        'field': FieldUpdater,           # 无依赖 - 更新田地覆盖
         'weed': WeedUpdater,             # 无依赖 - 清除杂草
         'mist': MistUpdater,             # 无依赖 - 更新迷雾
         'trajectory': TrajectoryUpdater, # 依赖agent - 画运动轨迹
@@ -469,7 +469,7 @@ class EnvironmentDynamics:
         2. 逐个处理，移除它们的出边
         3. 重复直到所有节点处理完
         
-        结果：[agent, frontier, weed, mist, trajectory, flags, step]
+        结果：[agent, field, weed, mist, trajectory, flags, step]
         """
         sorted_components = sort_components_by_dependencies(
             self.AVAILABLE_UPDATERS, 
@@ -529,7 +529,7 @@ def step(self, agent, maps_dict, env_state, action, action_type):
         
     # 详细的更新器执行顺序：
     # 1. AgentUpdater：记录agent新位置和速度
-    # 2. FrontierUpdater：用椭圆扇形标记已探索区域
+    # 2. FieldUpdater：用椭圆扇形标记已覆盖田地
     # 3. WeedUpdater：清除机器人覆盖的杂草
     # 4. MistUpdater：清除视野内的迷雾
     # 5. TrajectoryUpdater：连线记录运动轨迹
@@ -544,7 +544,7 @@ def step(self, agent, maps_dict, env_state, action, action_type):
 | 更新器 | 职责 | 更新内容 | 依赖关系 |
 |--------|------|----------|----------|
 | **AgentUpdater** | 记录机器人状态 | position, speed, steer | 无 |
-| **FrontierUpdater** | 标记探索区域 | 用椭圆扇形清除frontier | 无 |
+| **FieldUpdater** | 标记覆盖田地 | 用椭圆扇形清除field | 无 |
 | **WeedUpdater** | 清除杂草 | 用凸包填充清除weed | 无 |
 | **MistUpdater** | 更新迷雾 | 清除视野内的mist | 无 |
 | **TrajectoryUpdater** | 记录轨迹 | 画线连接位置点 | 需要agent历史 |
@@ -576,12 +576,12 @@ REWARD_COMPONENTS = {
     # 设计：20.0远大于-0.1，确保清除杂草始终有利
     
     # 🗺️ 探索奖励（前沿覆盖）
-    'frontier_coverage': FrontierCoverageCalculator,  # +1.0 归一化
+    'field_coverage': FieldCoverageCalculator,        # +1.0 归一化
     # 作用：鼓励探索未知区域
     # 归一化：除以(2*机器人宽度*最大速度)，保证值在合理范围
     
     # 📐 边界简化（前沿变化）
-    'frontier_variation': FrontierVariationCalculator, # +0.5 归一化
+    'field_variation': FieldVariationCalculator,      # +0.5 归一化
     # 作用：鼓励减少前沿复杂度（清理边缘）
     # 原理：Total Variation减少意味着边界更平滑
     
@@ -625,8 +625,8 @@ total_reward = (
     
     # 3. 探索奖励：鼓励探索和边界清理
     + 0.125 * (                     # 组系数（可调）
-        frontier_coverage * 1.0      # 覆盖奖励
-        + frontier_variation * 0.5   # 边界简化奖励
+        field_coverage * 1.0         # 田地覆盖奖励
+        + field_variation * 0.5      # 边界简化奖励
     )
     
     # 4. 运动质量：鼓励平滑运动（当前禁用）
@@ -660,7 +660,7 @@ reward = -0.1 + 1*20.0 + 0 + 0 + 500.0 = 519.9
 ```python
 # 训练初期：更关注探索
 env.reward_system.update_coefficients({
-    'frontier_total_coef': 0.5,    # 提高探索权重
+    'field_group_coef': 0.5,       # 提高田地覆盖权重
     'weed_removal_coef': 10.0      # 降低杂草权重
 })
 
@@ -1034,7 +1034,7 @@ def step(self, action):
     # 1. agent_updater: 更新机器人位置
     # 2. collision_detector: 检测碰撞
     # 3. weed_updater: 清理杂草
-    # 4. frontier_updater: 更新覆盖区域
+    # 4. field_updater: 更新田地覆盖
     # 5. trajectory_updater: 记录轨迹
     # 6. flags_updater: 更新完成标志
     # 7. step_counter: 增加步数
@@ -1120,7 +1120,7 @@ def step_detailed_flow(action):
         └── Rollback if collision
     ↓
     # Step 4: Map updates (in order)
-    for updater in ['agent', 'frontier', 'weed', 'mist', 
+    for updater in ['agent', 'field', 'weed', 'mist', 
                     'trajectory', 'flags', 'step']:
         updater.update(state)
     ↓
@@ -1222,7 +1222,7 @@ class EnvironmentConfig:
     # False: 直接使用二值地图
     # 仅v2环境有效
     
-    ensure_frontier_visibility: bool = True 
+    ensure_field_visibility: bool = True 
     # 确保初始位置能看到前沿
     # True: 避免开局就被困住
     # False: 可能需要先找到农田
@@ -1253,7 +1253,6 @@ class EnvironmentConfig:
     multiscale_feature_size: int = 16     # Feature map size per scale
     use_global_features: bool = True      # Add global context features
     use_trajectory: bool = True           # Include trajectory in observation
-    obs_use_mist: bool = True             # Apply mist to observation
     position_noise: float = 0.0           # Position noise std dev
     direction_noise: float = 0.0          # Direction noise std dev
     
@@ -1264,10 +1263,10 @@ class EnvironmentConfig:
     # Weed (primary objective)
     reward_weed_removal_coef: float = 20.0 # Per weed cleared
     
-    # Frontier exploration
-    reward_frontier_total_coef: float = 0.125  # Group coefficient
-    reward_frontier_coverage_coef: float = 1.0 # Area coverage
-    reward_frontier_tv_coef: float = 0.5       # Edge simplification
+    # Field coverage
+    reward_field_group_coef: float = 0.125     # Group coefficient
+    reward_field_coverage: float = 1.0         # Area coverage
+    reward_field_variation: float = 0.5        # Edge simplification
     
     # Turning quality
     reward_turn_total_coef: float = 0.0        # Group coefficient (disabled)
@@ -1305,7 +1304,7 @@ env_v2 = CppEnv(
     use_mist=True,       # Fog of war enabled
     use_apf=True,        # APF processing enabled
     use_traj=True,       # Trajectory tracking
-    reward_frontier_coverage_coef=0.5,  # Adjusted coefficients
+    reward_field_coverage=0.5,           # Adjusted coefficients
 )
 
 # CppEnv v3 - Mist-focused
@@ -1403,7 +1402,7 @@ class CppEnvBase(gym.Env):
                 'total': float,
                 'base': float,
                 'weed_removal': float,
-                'frontier_total': float,
+                'field_group': float,
                 'turning_total': float,
                 'collision_penalty': float,
                 'completion_bonus': float,
@@ -1542,7 +1541,7 @@ def compute_apf(binary_map, max_step):
 
 | 地图类型 | Max Step | 衰减速度 | Padding | 设计理由 |
 |----------|----------|----------|---------|----------|
-| **Frontier** | 30 | 慢(0.967) | 否 | 长程吸引，引导探索远处区域 |
+| **Field** | 30 | 慢(0.967) | 否 | 长程吸引，引导覆盖远处田地 |
 | **Obstacle** | 10 | 快(0.9) | 是 | 短程排斥，只在靠近时避让 |
 | **Weed** | 40 | 很慢(0.975) | 否 | 超长程吸引，确保能找到远处杂草 |
 | **Trajectory** | 4 | 很快(0.75) | 否 | 极短程，轻微避免走重复路 |
@@ -2155,7 +2154,7 @@ class CustomRewardShaping:
             @staticmethod
             def calculate(env_state, **kwargs):
                 # Reward based on completion percentage
-                completion = env_state.weed_completion_ratio
+                completion = env_state.weed_coverage_ratio
                 return completion * ProgressReward.coefficient
         
         env.reward_system.add_calculator('progress', ProgressReward)

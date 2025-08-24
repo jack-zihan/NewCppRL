@@ -44,7 +44,7 @@ class CppEnvV4(CppEnvBase):
         super().generate_frontier_maps(map_id)
 
         # 加载hifs方向场（.npy格式）
-        hifs_dir = self.map_dir.parent / 'hifs'
+        hifs_dir = self.map_dir.parent / 'hif'
         hifs_filename = f'orientation_map_{self.map_id+1}.npy'
         hifs_path = hifs_dir / hifs_filename
         self.map_frontier_hifs = np.load(str(hifs_path)).astype(np.float32)
