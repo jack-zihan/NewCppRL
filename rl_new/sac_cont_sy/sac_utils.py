@@ -148,7 +148,7 @@ def create_update_fn(loss_module, optimizer, target_net_updater, cfg, compile_mo
         torchrl_logger.info(f"启用编译加速，模式: {mode}, warmup: {warmup}")
 
     # CudaGraph优化（需要PyTorch 2.0+）
-    if cfg.compile.cudagraph and torch.cuda.is_available():
+    if cfg.compile.cudagraphs and torch.cuda.is_available():
         try:
             update = CudaGraphModule(update, in_keys=[], out_keys=[], warmup=10)
             torchrl_logger.info("启用CudaGraph优化")
