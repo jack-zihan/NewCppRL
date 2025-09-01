@@ -284,7 +284,7 @@ def main(cfg: DictConfig):
 
                 # Evaluation
                 eval_interval = cfg.logger['eval_interval']
-                if collected_frames >= init_random_frames and collected_frames % eval_interval == 0:
+                if collected_frames >= init_random_frames and (i % eval_interval) == (eval_interval-1):
                     with timeit("eval"):
                         eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
                                                        cfg=cfg, logger=logger, step=collected_frames)
@@ -292,7 +292,7 @@ def main(cfg: DictConfig):
 
                         # Checkpoint保存（基于评估奖励）
                         checkpoint_interval = cfg.logger['test_interval']
-                        if collected_frames % checkpoint_interval == 0:
+                        if (i % checkpoint_interval) == (checkpoint_interval-1):
                             checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
                                                             step=collected_frames)
                 # 显示训练进度

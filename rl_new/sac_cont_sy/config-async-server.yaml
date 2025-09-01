@@ -109,10 +109,10 @@ logger:
   mode: online          # online, offline
   test_interval: 25_000  # checkpoint保存间隔
   test_ckpt_num: 5      # 保留最优的5个checkpoint
-  log_freq: 25_000      # 日志记录频率（帧数）
+  log_freq: 5000      # 日志记录频率（帧数）
 
   # 详细评估配置
-  eval_interval: 5000   # 评估频率（帧数）
+  eval_interval: 25_000   # 评估频率（帧数）
   eval_episodes: 4        # 每次评估4个episode（更稳定的统计）
   eval_max_steps: 10000   # 每个episode最大步数
   eval_video: true        # 录制2x2网格视频
