@@ -57,10 +57,10 @@ def make_environment(cfg, logger=None, train_device="cpu", eval_device="cpu"):
 
     # 验证环境提前绑定参数
     partial_eval = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=eval_device,
-                                     from_pixels=cfg.logger.video,
+                                     from_pixels=cfg.logger.eval_video,
                                      **(cfg.env.get('env_kwargs') or {}))  # 与训练环境不同的是from_pixels
     trsf_clone = train_env.transform.clone()
-    if cfg.logger.video: trsf_clone.insert(0, VideoRecorder(logger, tag="rendering/test", in_keys=["pixels"],
+    if cfg.logger.eval_video: trsf_clone.insert(0, VideoRecorder(logger, tag="rendering/test", in_keys=["pixels"],
                                                             make_grid=True, skip=cfg.logger.eval_video_skip))
     eval_env = TransformedEnv(
         ParallelEnv(cfg.logger.eval_episodes, EnvCreator(partial_eval), serial_for_single=True),

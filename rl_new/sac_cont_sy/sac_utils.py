@@ -234,7 +234,7 @@ def evaluate_policy_parallel(actor_critic, cfg, train_device, logger, step):
         eval_rollout = eval_env.rollout( max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
                                         auto_cast_to_device=True, break_when_all_done=True)  # 确保所有环境完成完整episode
     # 3. 视频上传（如果配置了）
-    if cfg.logger.video: eval_env.apply(dump_video)
+    if cfg.logger.eval_video: eval_env.apply(dump_video)
     
     # 4. 从"next"字典的最后一帧提取所有数据
     episode_rewards = eval_rollout["next", "episode_reward"][:, -1].cpu().numpy() # RewardSum和StepCounter的输出在"next"中

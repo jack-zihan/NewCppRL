@@ -8,7 +8,7 @@ in_server: True
 
 # ============ 环境配置 ============
 env:
-  env_id: "NewPasture-v2"  # 可选: NewPasture-v1, v2, v3, v4, v5
+  env_id: "NewPasture-v4"  # 可选: NewPasture-v1, v2, v3, v4, v5
   # v1: 基础环境（含杂草）
   # v2: APF增强环境（默认）
   # v3: 多尺度特征环境
