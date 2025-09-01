@@ -1,0 +1,69 @@
+pretrained_model: null
+seed: 42
+in_server: false
+env:
+  env_id: NewPasture-v2
+  seed: 42
+  env_kwargs: null
+collector:
+  total_frames: 4000000
+  frames_per_batch: 20
+  init_random_frames: 50000
+  update_freq: 10000
+  env_per_collector: 4
+  gpu_devices:
+  - 1
+  processes_per_gpu: 8
+  cpu_workers: null
+  num_envs: 16
+  pin_memory: true
+training:
+  device: cuda:0
+  use_amp: false
+  total_updates: 1000000
+buffer:
+  buffer_size: 500000
+  batch_size: 1024
+  pin_memory: true
+  prefetch: 3
+  temp_dir: ~/rl_temp_train_data
+  shared_memory: true
+optim:
+  lr_actor: 1.0e-05
+  weight_decay_actor: 0.0001
+  eps_actor: 1.0e-08
+  lr_critic: 0.0003
+  weight_decay_critic: 0
+  eps_critic: 1.0e-08
+  lr_alpha: 0.0003
+  weight_decay_alpha: 0
+  eps_alpha: 1.0e-08
+  max_grad_norm: null
+loss:
+  gamma: 0.99
+  target_update_polyak: 0.9997
+  target_entropy_weight: 0.2
+  target_entropy: auto
+  utd_ratio: 1
+  loss_function: l2
+  alpha_init: 1.0
+compile:
+  enable: false
+  mode: null
+  warmup: 2
+  cudagraph: true
+logger:
+  backend: null
+  project_name: SAC
+  group_name: Weed
+  exp_name: Train
+  model_name: ContinuousSAC
+  mode: online
+  test_interval: 25000
+  test_ckpt_num: 5
+  log_freq: 25000
+  eval_interval: 25000
+  eval_episodes: 4
+  eval_max_steps: 10000
+  eval_video: true
+  eval_video_skip: 100
