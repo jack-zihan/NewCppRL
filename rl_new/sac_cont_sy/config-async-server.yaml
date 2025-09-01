@@ -114,7 +114,7 @@ logger:
   # 详细评估配置
   eval_interval: 25_000   # 评估频率（帧数）
   eval_episodes: 4        # 每次评估4个episode（更稳定的统计）
-  eval_max_steps: 10000   # 每个episode最大步数
+  eval_max_steps: 1000   # 每个episode最大步数
   eval_video: true        # 录制2x2网格视频
   eval_video_skip: 100     # 视频跳帧（减小文件大小）
 
