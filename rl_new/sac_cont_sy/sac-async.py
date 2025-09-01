@@ -297,7 +297,7 @@ def main(cfg: DictConfig):
                         #                                     step=collected_frames)
                         checkpoint_interval = cfg.logger['test_interval']
                         if (i % checkpoint_interval) == (checkpoint_interval-1):
-                            checkpoint_manager.save_if_best(model=actor_critic, reward=0,
+                            checkpoint_manager.save_if_best(model=actor_critic, reward=i,
                                                             step=i)
                 # 显示训练进度
                 torchrl_logger.info(f"Collected frames: {collected_frames}")
