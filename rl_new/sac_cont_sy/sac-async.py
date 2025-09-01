@@ -286,15 +286,19 @@ def main(cfg: DictConfig):
                 eval_interval = cfg.logger['eval_interval']
                 if collected_frames >= init_random_frames and (i % eval_interval) == (eval_interval-1):
                     with timeit("eval"):
-                        eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
-                                                       cfg=cfg, logger=logger, step=collected_frames)
-                        metrics_to_log.update(eval_metrics)
+                        # eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
+                        #                                cfg=cfg, logger=logger, step=collected_frames)
+                        # metrics_to_log.update(eval_metrics)
 
                         # Checkpoint保存（基于评估奖励）
+                        # checkpoint_interval = cfg.logger['test_interval']
+                        # if (i % checkpoint_interval) == (checkpoint_interval-1):
+                        #     checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
+                        #                                     step=collected_frames)
                         checkpoint_interval = cfg.logger['test_interval']
                         if (i % checkpoint_interval) == (checkpoint_interval-1):
-                            checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
-                                                            step=collected_frames)
+                            checkpoint_manager.save_if_best(model=actor_critic, reward=0,
+                                                            step=i)
                 # 显示训练进度
                 torchrl_logger.info(f"Collected frames: {collected_frames}")
                 torchrl_logger.info(f"Eval Logs: {metrics_to_log}")
@@ -302,7 +306,7 @@ def main(cfg: DictConfig):
                 if logger is not None:
                     metrics_to_log.update(timeit.todict(prefix="time"))
                     metrics_to_log["time/speed"] = pbar.format_dict["rate"]
-                    log_metrics(logger, metrics_to_log, collected_frames)
+                    log_metrics(logger, metrics_to_log, i)
 
         collector.shutdown()
         end_time = time.time()
