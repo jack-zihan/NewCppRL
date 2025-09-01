@@ -53,7 +53,7 @@ from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
 from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatten, get_actor_actions,
-                                          generate_exp_name, evaluate_policy_parallel as evaluate_policy, CheckpointManager)
+                                          generate_exp_name, evaluate_policy_parallel as evaluate_policy, CheckpointManager, log_metrics)
 from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 

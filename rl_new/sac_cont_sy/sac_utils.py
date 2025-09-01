@@ -22,6 +22,10 @@ def dump_video(module):
     if isinstance(module, VideoRecorder):
         module.dump()
 
+def log_metrics(logger, metrics, step):
+    for metric_name, metric_value in metrics.items():
+        logger.log_scalar(metric_name, metric_value, step)
+
 
 def generate_exp_name(model_name: str, experiment_name: str) -> str:
     """Generates an ID (str) for the described experiment using UUID and current date."""
