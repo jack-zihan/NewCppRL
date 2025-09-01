@@ -78,12 +78,9 @@ def make_sac_modules(proof_environment):
     )
     return policy_module, qvalue_module
 
-
 def make_sac_models():
     proof_environment = make_env(device="cpu")
-    policy_module, qvalue_module = make_sac_modules(
-        proof_environment
-    )
+    policy_module, qvalue_module = make_sac_modules(proof_environment)
     actor_critic = torch.nn.ModuleList([policy_module, qvalue_module])
 
     with torch.no_grad():

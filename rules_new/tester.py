@@ -342,7 +342,7 @@ class PathPlannerTester:
             json.dump(analysis, f, indent=2)
         
         # 保存配置备份
-        with open(self.output_dir / 'config.yaml', 'w') as f:
+        with open(self.output_dir / 'config-async.yaml', 'w') as f:
             yaml.dump(self.config, f)
         
         # 生成Markdown报告

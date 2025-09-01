@@ -391,7 +391,7 @@ Collector进程 → 自动写入 → Replay Buffer ← 采样 ← 训练进程
 
 ### 3. 添加权重同步频率配置
 ```yaml
-# config.yaml
+# config-async.yaml
 collector:
   update_freq: 1000  # 每1000次更新同步一次权重（新增）
 ```

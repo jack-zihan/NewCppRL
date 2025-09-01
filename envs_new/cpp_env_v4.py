@@ -16,7 +16,9 @@ class CppEnv(CppEnvBase):
     """
     def __init__(self, render_mode="rgb_array", **kwargs):
         v4_defaults = {'use_mist': False, 'use_apf': False, 'use_trajectory': True, 'render_mist': False,
-                       'map_dir': "envs_new/maps/field_coverage"}
+                       "num_obstacles_range" : (0,0)
+                       # 'map_dir': "envs_new/maps/field_coverage"
+                       }
         final_kwargs = {**v4_defaults, **kwargs}
         super().__init__(render_mode=render_mode, **final_kwargs)
         

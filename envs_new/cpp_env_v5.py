@@ -119,7 +119,7 @@ class CppEnv(CppEnvV4):
     v5环境 - Field覆盖 + HIF方向引导
     """
     def __init__(self, render_mode="rgb_array", **kwargs):
-        v5_defaults = {'reward_hif': 0.01}  # 默认HIF奖励权重
+        v5_defaults = {'reward_hif': 0.01, 'map_dir': "envs_new/maps/field_coverage"}  # 默认HIF奖励权重
         final_kwargs = {**v5_defaults, **kwargs}
 
         super().__init__(render_mode=render_mode, **final_kwargs)

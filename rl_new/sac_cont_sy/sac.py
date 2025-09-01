@@ -28,7 +28,7 @@ import gymnasium as gym
 base_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(base_dir))
 
-from rl_new.sac_cont_sy.sac_cont_model import make_sac_models
+from rl_new.sac_cont_sy.model_utils import make_sac_models
 from torchrl_utils_new.utils_env import make_sac_env
 from rl_new.sac_cont_sy.sac_utils import setup_devices, create_update_fn
 from torchrl_utils.local_video_recorder import LocalVideoRecorder
@@ -291,6 +291,7 @@ def main(cfg: DictConfig):
                 **env_kwargs
             ) for dev in collector_devices],
             policy=actor,
+            policy_device='cpu',
             frames_per_batch=cfg.collector.frames_per_batch,
             total_frames=cfg.collector.total_frames,
             device=collector_devices,
@@ -396,9 +397,9 @@ def main(cfg: DictConfig):
                     
                     # 收集weed_ratio（如果存在）
                     if ("next", "completion_ratio") in data.keys(include_nested=True):
-                        episode_weed_ratios = data["next", "completion_ratio"][done_mask]
-                        if len(episode_weed_ratios) > 0:
-                            log_info["train/episode_weed_ratio"] = episode_weed_ratios.mean().item()
+                        episode_completion_ratios = data["next", "completion_ratio"][done_mask]
+                        if len(episode_completion_ratios) > 0:
+                            log_info["train/episode_completion_ratio"] = episode_completion_ratios.mean().item()
                             # 删除额外信息，避免replay buffer存储
                             data.pop('completion_ratio', None)
                             data.pop(('next', 'completion_ratio'), None)

@@ -170,7 +170,8 @@ class RewardSystem:
     
     def __init__(self, config: EnvironmentConfig):
         self.config = config
-    
+        self.AVAILABLE_CALCULATORS = dict(self.AVAILABLE_CALCULATORS)
+
     def calculate_reward(self, env_state: EnvironmentState, **kwargs) -> float:
         """计算总奖励值 - 直接从配置读取并传递系数"""
         total_reward = 0.0

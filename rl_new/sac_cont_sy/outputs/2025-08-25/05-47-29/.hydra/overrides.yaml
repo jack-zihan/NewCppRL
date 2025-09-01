@@ -1,6 +1,0 @@
-- env.env_id=NewPasture-v4
-- collector.total_frames=5000
-- collector.frames_per_batch=500
-- collector.init_random_frames=1000
-- logger.test_interval=2500
-- compile.cudagraph=false

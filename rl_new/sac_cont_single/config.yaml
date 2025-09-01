@@ -81,28 +81,28 @@ logger:
 # ============ Hydra命令行覆盖示例 ============
 # 使用方法：
 # 1. 修改随机种子：
-#    python train.py seed=123
+#    python sac.py seed=123
 #
 # 2. 修改批量大小和学习率：
-#    python train.py buffer.batch_size=1024 optim.lr_actor=1e-4
+#    python sac.py buffer.batch_size=1024 optim.lr_actor=1e-4
 #
 # 3. 使用所有GPU：
-#    python train.py collector.gpu_devices=-1
+#    python sac.py collector.gpu_devices=-1
 #
 # 4. 禁用混合精度：
-#    python train.py training.use_amp=false
+#    python sac.py training.use_amp=false
 #
 # 5. 改变训练设备：
-#    python train.py training.device=cuda:1
+#    python sac.py training.device=cuda:1
 #
 # 6. 组合多个参数：
-#    python train.py seed=42 collector.frames_per_batch=50 compile.enable=false
+#    python sac.py seed=42 collector.frames_per_batch=50 compile.enable=false
 #
 # 7. 禁用编译优化进行调试：
-#    python train.py compile.enable=false compile.cudagraph=false
+#    python sac.py compile.enable=false compile.cudagraph=false
 #
 # 8. 使用更激进的编译模式：
-#    python train.py compile.mode=max-autotune compile.warmup=5
+#    python sac.py compile.mode=max-autotune compile.warmup=5
 
 # ============ 性能优化说明 ============
 # 本配置已包含所有性能优化：

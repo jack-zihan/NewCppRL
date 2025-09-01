@@ -3,8 +3,8 @@
 
 # 基础配置
 pretrained_model: null
-ckpt_name: sync_version
 seed: 42
+in_server: false
 
 # ============ 环境配置 ============
 env:
@@ -23,18 +23,19 @@ env:
 # ============ 数据收集配置 ============
 collector:
   total_frames: 4_000_000
-  frames_per_batch: 1000  # 同步模式使用较小批次
+  frames_per_batch: 20  # 同步模式使用较小批次
   init_random_frames: 50_000  # 减少初始随机帧
-  # update_freq 不需要（同步模式）
-  
+  update_freq: 10_000  # 每10000帧更新一次策略
+  env_per_collector: 4 # 16
+
   # 多GPU/CPU收集配置（简洁直接）
   # -1: 使用所有可用设备（自动排除训练GPU）
   # null: 不使用该类型设备
   # 列表: 指定设备ID
-  gpu_devices: null        # 默认不使用GPU收集（单GPU场景）
+  gpu_devices: [1]        # 默认不使用GPU收集（单GPU场景）
   processes_per_gpu: 8     # 每个GPU运行2个进程（RTX 3090最优）
-  cpu_workers: 8           # 使用8个CPU进程进行收集
-  
+  cpu_workers: null          # 使用8个CPU进程进行收集
+  num_envs: 16
   # 备选配置示例：
   # gpu_devices: -1        # 自动使用所有GPU（排除训练GPU）
   # gpu_devices: null      # 不使用GPU收集
@@ -48,90 +49,108 @@ collector:
 # ============ 训练配置 ============
 training:
   device: cuda:0          # 训练使用的GPU（收集器会自动排除此GPU）
-  use_amp: true          # 混合精度训练（适合0-1掩码和浮点APF混合数据）
+  use_amp: False # true          # 混合精度训练（适合0-1掩码和浮点APF混合数据）
   total_updates: 1_000_000  # 总训练更新次数（与收集帧数独立）
 
 # ============ 回放缓冲区 ============
 buffer:
-  buffer_size: 500_000
-  batch_size: 1024  # 同步模式使用较小批次
+  buffer_size: 500_000 # 100_000 # Small buffer size to keep only recent elements
+  batch_size: 1024 #1024  # 同步模式使用较小批次
   pin_memory: true        # 锁定内存优化
-  prefetch: 3            # 同步模式减少预取
+  prefetch: 0 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
   temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
+  shared_memory: true    # 使用共享内存提升性能
 
 # ============ 优化器配置 ============
 optim:
   # Actor学习率（保持原始配置）
   lr_actor: 1.0e-5
   weight_decay_actor: 1.0e-4
-  
+  eps_actor: 1.0e-8
+
   # Critic学习率
   lr_critic: 3.0e-4
   weight_decay_critic: 0
-  
+  eps_critic: 1.0e-8
+
   # Alpha学习率
   lr_alpha: 3.0e-4
   weight_decay_alpha: 0
-  
+  eps_alpha: 1.0e-8
+
   # 梯度裁剪
   max_grad_norm: null    # null表示不裁剪，建议设置为1.0或10.0
 
 # ============ 损失函数配置 ============
 loss:
   gamma: 0.99
-  target_update_polyak: 0.9997
+  target_update_polyak: 0.9997 # 0.995
   target_entropy_weight: 0.2
   target_entropy: "auto"
   utd_ratio: 1            # 同步模式通常使用1:1比率
   loss_function: l2
+  alpha_init: 1.0
 
 # ============ 编译优化（借鉴官方SAC） ============
 compile:
-  enable: true           # 启用torch.compile（5-10x加速）
-  mode: reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
+  enable: false # true           # 启用torch.compile（5-10x加速）
+  mode: # reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
   warmup: 2             # compile_with_warmup的预热步数
-  cudagraph: true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+  cudagraphs: true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
 
 # ============ 日志配置 ============
 logger:
-  backend: wandb        # wandb, tensorboard, null
+  backend: null # wandb        # wandb, tensorboard, null
   project_name: SAC
-  model_name: ContinuousSAC
+  group_name: Weed
   exp_name: Train
-  test_interval: 50_000  # 保存checkpoint间隔
-  log_freq: 10_000      # 日志记录频率（帧数）
-  # 评估配置
+  model_name: ContinuousSAC
+
+  mode: online          # online, offline
+  test_interval: 25_000  # checkpoint保存间隔
+  test_ckpt_num: 5      # 保留最优的5个checkpoint
+  log_freq: 25_000      # 日志记录频率（帧数）
+
+  # 详细评估配置
   eval_interval: 25_000   # 评估频率（帧数）
-  eval_episodes: 4        # 每次评估的episode数量
-  eval_max_steps: 1500    # 每个评估episode的最大步数
-  eval_video: true        # 是否录制评估视频
-  eval_video_skip: 30     # 视频跳帧数（减小文件大小）
+  eval_episodes: 4        # 每次评估4个episode（更稳定的统计）
+  eval_max_steps: 10000   # 每个episode最大步数
+  eval_video: true        # 录制2x2网格视频
+  eval_video_skip: 100     # 视频跳帧（减小文件大小）
+
+# ============ 1.3版本hydra, 提高效率自定义输出地址 ============
+hydra:
+  job:
+     chdir: true  # 保持1.1行为
+  run:
+     dir: outputs/${logger.exp_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
 
 # ============ Hydra命令行覆盖示例 ============
 # 使用方法：
 # 1. 修改随机种子：
-#    python train.py seed=123
+#    python sac.py seed=123
 #
 # 2. 修改批量大小和学习率：
-#    python train.py buffer.batch_size=1024 optim.lr_actor=1e-4
+#    python sac.py buffer.batch_size=1024 optim.lr_actor=1e-4
 #
 # 3. 使用所有GPU：
-#    python train.py collector.gpu_devices=-1
+#    python sac.py collector.gpu_devices=-1
 #
 # 4. 禁用混合精度：
-#    python train.py training.use_amp=false
+#    python sac.py training.use_amp=false
 #
 # 5. 改变训练设备：
-#    python train.py training.device=cuda:1
+#    python sac.py training.device=cuda:1
 #
 # 6. 组合多个参数：
-#    python train.py seed=42 collector.frames_per_batch=50 compile.enable=false
+#    python sac.py seed=42 collector.frames_per_batch=50 compile.enable=false
 #
 # 7. 禁用编译优化进行调试：
-#    python train.py compile.enable=false compile.cudagraph=false
+#    python sac.py compile.enable=false compile.cudagraph=false
 #
 # 8. 使用更激进的编译模式：
-#    python train.py compile.mode=max-autotune compile.warmup=5
+#    python sac.py compile.mode=max-autotune compile.warmup=5
 
 # ============ 性能优化说明 ============
 # 本配置已包含所有性能优化：

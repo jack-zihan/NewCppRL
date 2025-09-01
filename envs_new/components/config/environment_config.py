@@ -14,7 +14,7 @@ class EnvironmentConfig:
     """完全扁平化的环境配置，简洁高效"""
     
     # 核心环境参数
-    action_type: str = "discrete"
+    action_type: str = "continuous" #"discrete"
     max_episode_steps: int = 30000
     
     # 地图配置参数（原MapConfig）

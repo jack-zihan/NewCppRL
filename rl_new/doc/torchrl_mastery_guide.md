@@ -3314,14 +3314,14 @@ class DistributedBenchmark:
 #### Level 1: 最小可行项目（<50行）
 
 ```python
-# train.py - 一个文件搞定所有
+# sac.py - 一个文件搞定所有
 import yaml
 from torchrl.envs import GymEnv
 from torchrl.collectors import SyncDataCollector
 from torchrl.objectives import PPOLoss
 
 # 加载配置
-with open("config.yaml") as f:
+with open("config-async.yaml") as f:
     config = yaml.safe_load(f)
 
 # 初始化

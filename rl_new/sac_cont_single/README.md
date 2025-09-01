@@ -44,34 +44,34 @@ training:
 ### 基础训练
 ```bash
 cd /home/lzh/NewCppRL/rl_new/sac_cont_single
-python train.py
+python sac.py
 ```
 
 ### 自定义配置
 
 #### 1. 双GPU配置（推荐）
 ```bash
-python train.py collector.gpu_device=cuda:1 training.device=cuda:0
+python sac.py collector.gpu_device=cuda:1 training.device=cuda:0
 ```
 
 #### 2. 单GPU配置
 ```bash
-python train.py collector.gpu_device=null training.device=cuda:0
+python sac.py collector.gpu_device=null training.device=cuda:0
 ```
 
 #### 3. 增加并行环境数量
 ```bash
-python train.py collector.num_envs=64
+python sac.py collector.num_envs=64
 ```
 
 #### 4. 使用预训练模型
 ```bash
-python train.py pretrained_model=path/to/model.pt
+python sac.py pretrained_model=path/to/model.pt
 ```
 
 #### 5. 调整批量大小
 ```bash
-python train.py buffer.batch_size=4096 collector.frames_per_batch=16384
+python sac.py buffer.batch_size=4096 collector.frames_per_batch=16384
 ```
 
 ## 与多进程版本的对比
@@ -112,7 +112,7 @@ tail -f ckpt/sac_cont_single/*/train.log
 
 # 使用wandb监控
 wandb login
-python train.py logger.backend=wandb
+python sac.py logger.backend=wandb
 ```
 
 ### 性能分析
