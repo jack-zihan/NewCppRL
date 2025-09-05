@@ -53,7 +53,7 @@ from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
 from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatten, get_actor_actions,
-                                          generate_exp_name, evaluate_policy_parallel as evaluate_policy, CheckpointManager, log_metrics)
+                                          generate_exp_name, evaluate_policy_parallel, evaluate_policy, CheckpointManager, log_metrics)
 from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 
@@ -268,45 +268,38 @@ def main(cfg: DictConfig):
                 losses.append(loss_td.select("loss_actor", "loss_qvalue", "loss_alpha"))
 
             # Logging
-            if (i % log_freq) == (log_freq - 1):
-                torchrl_logger.info("Logging")
-                collected_frames = replay_buffer.write_count
-                metrics_to_log = {}
+            metrics_to_log = {}
+            collected_frames = replay_buffer.write_count
+            torchrl_logger.info(f"Collected frames: {collected_frames}") # 显示收集进度
+
+            if (i % log_freq) == 0: # 不用log_freq-1, 否则可能都收敛了才开始记录
+                torchrl_logger.info("Training Logging")
                 if collected_frames >= init_random_frames:
                     losses_m = torch.stack(losses).mean()
                     losses = []
-                    metrics_to_log["train/q_loss"] = losses_m.get("loss_qvalue")
-                    metrics_to_log["train/actor_loss"] = losses_m.get("loss_actor")
-                    metrics_to_log["train/alpha_loss"] = losses_m.get("loss_alpha")
+                    metrics_to_log["train/q_loss"] = losses_m["loss_qvalue"]
+                    metrics_to_log["train/actor_loss"] = losses_m["loss_actor"]
+                    metrics_to_log["train/alpha_loss"] = losses_m["loss_alpha"]
                     metrics_to_log["train/alpha"] = loss_td["alpha"]
                     metrics_to_log["train/entropy"] = loss_td["entropy"]
                     metrics_to_log["train/collected_frames"] = int(collected_frames)
 
-                # Evaluation
-                eval_interval = cfg.logger['eval_interval']
-                if collected_frames >= init_random_frames and (i % eval_interval) == (eval_interval-1):
-                    with timeit("eval"):
-                        # eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
-                        #                                cfg=cfg, logger=logger, step=collected_frames)
-                        # metrics_to_log.update(eval_metrics)
+            # Evaluation
+            eval_interval = cfg.logger['eval_interval']
+            if collected_frames >= init_random_frames and (i % eval_interval) == 0:
+                with timeit("eval"):
+                    eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
+                                                   cfg=cfg, logger=logger, step=collected_frames)
+                    metrics_to_log.update(eval_metrics)
+                    # Checkpoint保存（基于评估奖励）
+                    checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
+                                                    step=collected_frames)
+                    torchrl_logger.info(f"Eval Logs: {metrics_to_log}") # 显示估计进度
 
-                        # Checkpoint保存（基于评估奖励）
-                        # checkpoint_interval = cfg.logger['test_interval']
-                        # if (i % checkpoint_interval) == (checkpoint_interval-1):
-                        #     checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
-                        #                                     step=collected_frames)
-                        checkpoint_interval = cfg.logger['test_interval']
-                        if (i % checkpoint_interval) == (checkpoint_interval-1):
-                            checkpoint_manager.save_if_best(model=actor_critic, reward=i,
-                                                            step=i)
-                # 显示训练进度
-                torchrl_logger.info(f"Collected frames: {collected_frames}")
-                torchrl_logger.info(f"Eval Logs: {metrics_to_log}")
-
-                if logger is not None:
-                    metrics_to_log.update(timeit.todict(prefix="time"))
-                    metrics_to_log["time/speed"] = pbar.format_dict["rate"]
-                    log_metrics(logger, metrics_to_log, i)
+            if logger is not None:
+                metrics_to_log.update(timeit.todict(prefix="time"))
+                metrics_to_log["time/speed"] = pbar.format_dict["rate"]
+                log_metrics(logger, metrics_to_log, i)
 
         collector.shutdown()
         end_time = time.time()

@@ -106,7 +106,10 @@ class SACComprehensiveTester:
             random_action = action_spec.rand()
             td["action"] = random_action
             td_next = env.step(td)
-            print(f"    ✓ Step成功，奖励: {td_next.get('reward', 0).item():.4f}")
+            reward = td_next["next"]["reward"]
+            if hasattr(reward, 'item'):
+                reward = reward.item()
+            print(f"    ✓ Step成功，奖励: {reward:.4f}")
             
             # 关闭环境
             env.close()
@@ -231,7 +234,7 @@ class SACComprehensiveTester:
                     td = env.step(td)
                     
                     # 累计奖励
-                    reward = td.get("reward", torch.zeros(1))
+                    reward = td["next"]["reward"]
                     if hasattr(reward, 'item'):
                         reward_value = reward.item()
                     else:
@@ -240,7 +243,7 @@ class SACComprehensiveTester:
                     steps += 1
                     
                     # 检查是否结束
-                    done = td.get("done", False)
+                    done = td["next"]["done"]
                     if hasattr(done, 'item'):
                         done = done.item()
                     
@@ -363,7 +366,8 @@ class SACComprehensiveTester:
                     with torch.no_grad():
                         td = actor(td.to(self.device))
                     td = eval_env.step(td)
-                    rewards.append(td.get("reward", torch.zeros(1)).item())
+                    reward = td["next"]["reward"]
+                    rewards.append(reward.item() if hasattr(reward, 'item') else reward)
                 
                 # 保存简单的测试结果作为"视频"
                 with open(video_path, 'w') as f:

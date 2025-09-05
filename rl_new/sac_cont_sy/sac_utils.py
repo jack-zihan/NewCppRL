@@ -4,17 +4,18 @@ import numpy as np
 from datetime import datetime
 import gymnasium as gym
 
+import sys
 import torch
 import warnings
 from torchrl._utils import compile_with_warmup, logger as torchrl_logger
 from tensordict.nn import CudaGraphModule
 from tensordict import TensorDict
+from tqdm import tqdm
 
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.record import VideoRecorder
-from rl_new.sac_cont_sy.env_utils import make_environment
-
+from rl_new.sac_cont_sy.env_utils import make_environment, make_single_environment
 
 
 def dump_video(module):
@@ -78,12 +79,12 @@ def setup_devices(cfg):
                     torchrl_logger.warning(f"GPU {gpu_id} 不存在，跳过")
             gpu_devices = valid_gpus
 
-        processes_per_gpu = cfg.collector.get('processes_per_gpu', 2)
+        processes_per_gpu = cfg.collector.processes_per_gpu
         for gpu_id in gpu_devices:
             collector_devices.extend([f'cuda:{gpu_id}'] * processes_per_gpu)
 
     # CPU收集器
-    cpu_workers = cfg.collector.get('cpu_workers', 0)
+    cpu_workers = cfg.collector.cpu_workers
     if cpu_workers is not None:
         if cpu_workers == -1:  # 最大化CPU使用
             cpu_workers = max(1, os.cpu_count() - 2)
@@ -92,7 +93,7 @@ def setup_devices(cfg):
 
     # 如果没有配置任何设备，使用默认配置
     if not collector_devices:
-        collector_devices = ['cpu'] * cfg.collector.get('num_envs', 32)
+        collector_devices = ['cpu'] * cfg.collector.num_envs
 
     return train_device, collector_devices
 
@@ -345,32 +346,27 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
     Returns:
         eval_metrics: 评估指标字典
     """
-    from rl_new.sac_cont_sy.env_utils import make_single_environment
-    from torchrl.envs.utils import ExplorationType, set_exploration_type
-    from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
-    from tensordict import TensorDict
-
-    # 创建评估环境
     eval_cfg = cfg.logger
     eval_episodes = eval_cfg.eval_episodes
+    torchrl_logger.info(f"开始评估 - {eval_episodes} episodes")
+
     eval_envs = []
     seeds = [cfg.seed + i for i in range(eval_episodes)]  # 固定种子确保可重复性
 
-    torchrl_logger.info(f"开始评估 - {eval_episodes} episodes")
-
-    # 使用make_single_environment创建环境
+    # 使用make_single_environment创建环境（在CPU上评估以节省GPU内存）
     for seed in seeds:
-        env = make_single_environment(cfg, device=train_device, seed=seed, from_pixels=eval_cfg['eval_video'])
+        env = make_single_environment(cfg, device="cpu", seed=seed, from_pixels=eval_cfg['eval_video'])
         eval_envs.append(env)
 
-    # 设置多episode网格视频录制器
+    # 设置多episode网格视频录制器（使用memmap避免内存溢出）
     recorder = None
-    if eval_cfg.get('eval_video', False) and logger is not None:
+    if eval_cfg.eval_video and logger is not None:
+        max_frames = min(4, eval_episodes)  # 最多录制4个环境的视频
         recorder = LocalVideoRecorder(
-            logger=logger,
-            tag=f"eval_grid/step_{step}",
-            grid_shape=(2, 2),  # 2x2网格
-            in_keys=["pixels"] if eval_cfg.get('eval_video', False) else [])
+            device="cpu",  # 明确指定CPU设备
+            max_len=(eval_cfg.eval_max_steps * max_frames) // eval_cfg.eval_video_skip + 2,
+            use_memmap=True, make_grid=True, # 关键：启用内存映射，避免显存/内存溢出, 制作2x2网格视频
+            nrow=2, skip=1,fps=6)             # 2列网格, 不跳帧（评估时已经通过eval_video_skip控制）, # 视频帧率
 
     with set_exploration_type(ExplorationType.DETERMINISTIC):  # 设置评估模式（无探索）
         # 初始化统计
@@ -385,8 +381,18 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
             td = env.reset()
             tds.append(td)
 
-        # 运行评估
-        for t in range(eval_cfg['eval_max_steps']):
+        # 运行评估（带进度条）
+        max_steps = eval_cfg['eval_max_steps']
+        use_progress_bar = eval_cfg.show_progress
+        
+        # 创建进度条迭代器
+        if use_progress_bar:
+            pbar = tqdm(range(max_steps), desc="Evaluating", file=sys.stderr, leave=False)  # 输出到stderr避免干扰日志 # 完成后清除进度条
+            step_iterator = pbar
+        else:
+            step_iterator = range(max_steps)
+        
+        for t in step_iterator:
             # 收集未结束的环境的观察
             active_tds = []
             active_indices = []
@@ -398,10 +404,11 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
             if not active_tds:
                 break
 
-            # 批量获取动作
-            batch_td = torch.stack(active_tds)
+            batch_td = torch.stack(active_tds) # 批量获取动作（CPU到GPU再回CPU的设备转换）
+
+            batch_td = batch_td.to(train_device) # 将观测移到GPU进行高效推理
             with torch.no_grad():
-                batch_td = actor_critic[0](batch_td)  # 使用actor获取动作
+                batch_td = actor_critic[0](batch_td).to("cpu")  # 使用actor获取动作, 将动作移回CPU执行（因为环境在CPU上）
 
             # 执行动作并更新统计
             for i, (td, idx) in enumerate(zip(batch_td.unbind(0), active_indices)):
@@ -409,35 +416,57 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
                 next_td = eval_envs[idx].step(td)
                 tds[idx] = next_td
 
-                # 更新统计
-                reward = next_td.get("next_reward", next_td.get("reward", 0))
+                # 更新统计 - 从next子字典获取奖励和done
+                reward = next_td["next"]["reward"]
                 if hasattr(reward, 'item'):
                     reward = reward.item()
                 episode_rewards[idx] += reward
                 episode_lengths[idx] += 1
 
-                # 检查结束
-                done = next_td.get("done", False)
+                # 检查结束 - done在next中表示下一状态是否结束
+                done = next_td["next"]["done"]
                 if hasattr(done, 'item'):
                     done = done.item()
                 dones[idx] = done
 
-                # 获取completion_ratio（如果存在）
-                if "completion_ratio" in next_td:
-                    completion_ratios[idx] = next_td["completion_ratio"].item()
+                # 获取completion_ratio（也在next中）
+                if "completion_ratio" in next_td["next"]:
+                    completion_ratios[idx] = next_td["next"]["completion_ratio"].item()
+            
+            # 更新进度条信息（每10步更新一次，避免频繁刷新）
+            if use_progress_bar and t % 10 == 0:
+                # 计算实时统计
+                active_count = len(active_indices)
+                completed_count = sum(dones)
+                mean_reward = np.mean([r for r, d in zip(episode_rewards, dones) if d]) if completed_count > 0 else 0
+                current_mean = np.mean(episode_rewards)  # 当前所有episode的平均奖励
+                
+                # 更新进度条postfix
+                pbar.set_postfix({
+                    'active': f'{active_count}/{eval_episodes}',
+                    'done': completed_count,
+                    'reward': f'{current_mean:.2f}',
+                    'best': f'{max(episode_rewards):.2f}'
+                })
 
             # 录制视频帧（如果启用）
-            if recorder and (t + 1) % eval_cfg.get('eval_video_skip', 100) == 0:
+            if recorder and (t + 1) % eval_cfg.eval_video_skip == 0:
                 pixels = []
                 for idx in range(min(4, eval_episodes)):
                     if not dones[idx] and "pixels" in tds[idx]:
                         pixels.append(tds[idx]["pixels"])
                 if pixels:
                     recorder.apply(torch.stack(pixels, 0))
+    
+    # 关闭进度条
+    if use_progress_bar:
+        pbar.close()
 
-    # 关闭视频录制器
+    # 关闭视频录制器并上传到wandb
     if recorder:
-        recorder.dump()
+        vid_tensor = recorder.dump()
+        if vid_tensor is not None and logger is not None:
+            logger.log_video(f'eval_grid/step_{step}', vid_tensor, step=step)
 
     # 关闭所有环境
     for env in eval_envs:

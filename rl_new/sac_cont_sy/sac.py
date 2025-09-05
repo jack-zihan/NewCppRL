@@ -270,8 +270,8 @@ def main(cfg: DictConfig):
         replay_buffer = TensorDictPrioritizedReplayBuffer(
             alpha=0.7,
             beta=0.5,
-            pin_memory=cfg.buffer.get('pin_memory', True),
-            prefetch=cfg.buffer.get('prefetch', 3),
+            pin_memory=cfg.buffer.pin_memory,
+            prefetch=cfg.buffer.prefetch,
             storage=LazyMemmapStorage(
                 max_size=cfg.buffer.buffer_size,
                 scratch_dir=tmpdir,
@@ -361,7 +361,7 @@ def main(cfg: DictConfig):
         frames_per_batch = cfg.collector.frames_per_batch
         num_updates = math.ceil(frames_per_batch / batch_size * cfg.loss.utd_ratio)
         test_interval = cfg.logger.test_interval
-        log_freq = cfg.logger.get('log_freq', 10000)
+        log_freq = cfg.logger.log_freq
         
         # 初始化统计
         collected_frames = 0
@@ -436,11 +436,11 @@ def main(cfg: DictConfig):
                 # 计算平均损失
                 losses_tensor = torch.stack(losses)
                 log_info.update({
-                    "train/q_loss": losses_tensor.get("loss_qvalue").mean().item(),
-                    "train/a_loss": losses_tensor.get("loss_actor").mean().item(),
-                    "train/alpha_loss": losses_tensor.get("loss_alpha").mean().item(),
-                    "train/alpha": loss_out.get("alpha", 0),
-                    "train/entropy": loss_out.get("entropy", 0),
+                    "train/q_loss": losses_tensor["loss_qvalue"].mean().item(),
+                    "train/a_loss": losses_tensor["loss_actor"].mean().item(),
+                    "train/alpha_loss": losses_tensor["loss_alpha"].mean().item(),
+                    "train/alpha": loss_out["alpha"],
+                    "train/entropy": loss_out["entropy"],
                 })
                 
                 # 记录收集信息
@@ -469,7 +469,7 @@ def main(cfg: DictConfig):
                 torchrl_logger.info(f"保存模型: {model_name}")
             
             # ============ 评估 ============
-            eval_interval = cfg.logger.get('eval_interval', 25000)
+            eval_interval = cfg.logger.eval_interval
             if collected_frames % eval_interval == 0 and collected_frames > 0:
                 torchrl_logger.info(f"开始评估 (frames: {collected_frames})")
                 

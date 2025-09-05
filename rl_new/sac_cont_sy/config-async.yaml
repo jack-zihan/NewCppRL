@@ -107,7 +107,7 @@ logger:
   model_name: ContinuousSAC
 
   mode: online          # online, offline
-  test_interval: 25_000  # checkpoint保存间隔
+  test_interval: 25_000  # 暂时弃用，由于模型保存基于评估，使用eval_interval 同时作为checkpoint保存间隔
   test_ckpt_num: 5      # 保留最优的5个checkpoint
   log_freq: 25_000      # 日志记录频率（帧数）
 
@@ -117,6 +117,7 @@ logger:
   eval_max_steps: 10000   # 每个episode最大步数
   eval_video: true        # 录制2x2网格视频
   eval_video_skip: 100     # 视频跳帧（减小文件大小）
+  show_progress: true      # 是否显示评估进度条（需要tqdm）
 
 # ============ 1.3版本hydra, 提高效率自定义输出地址 ============
 hydra:
