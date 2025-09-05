@@ -270,10 +270,11 @@ def main(cfg: DictConfig):
             # Logging
             metrics_to_log = {}
             collected_frames = replay_buffer.write_count
-            torchrl_logger.info(f"Collected frames: {collected_frames}") # 显示收集进度
+
 
             if (i % log_freq) == 0: # 不用log_freq-1, 否则可能都收敛了才开始记录
                 torchrl_logger.info("Training Logging")
+                torchrl_logger.info(f"Collected frames: {collected_frames}")  # 显示收集进度
                 if collected_frames >= init_random_frames:
                     losses_m = torch.stack(losses).mean()
                     losses = []
@@ -283,6 +284,7 @@ def main(cfg: DictConfig):
                     metrics_to_log["train/alpha"] = loss_td["alpha"]
                     metrics_to_log["train/entropy"] = loss_td["entropy"]
                     metrics_to_log["train/collected_frames"] = int(collected_frames)
+
 
             # Evaluation
             eval_interval = cfg.logger['eval_interval']
