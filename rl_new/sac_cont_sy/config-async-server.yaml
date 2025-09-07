@@ -8,7 +8,7 @@ in_server: True
 
 # ============ 环境配置 ============
 env:
-  env_id: "NewPasture-v4"  # 可选: NewPasture-v1, v2, v3, v4, v5
+  env_id: "NewPasture-v2"  # 可选: NewPasture-v1, v2, v3, v4, v5
   # v1: 基础环境（含杂草）
   # v2: APF增强环境（默认）
   # v3: 多尺度特征环境
@@ -109,12 +109,12 @@ logger:
 
   mode: online          # online, offline
   test_interval: 25_000  # 时弃用，由于模型保存基于评估，使用eval_interval 同时作为checkpoint保存间隔
-  test_ckpt_num: 5      # 保留最优的5个checkpoint
+  test_ckpt_num: 10      # 保留最优的5个checkpoint
   log_freq: 5000      # 日志记录频率（帧数）
 
   # 详细评估配置
   eval_interval: 25_000   # 评估频率（帧数）
-  eval_episodes: 4        # 每次评估4个episode（更稳定的统计）
+  eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
   eval_max_steps: 10000   # 每个episode最大步数
   eval_video: true       # 录制2x2网格视频
   eval_video_skip: 100     # 视频跳帧（减小文件大小）
