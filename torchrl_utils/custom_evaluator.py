@@ -88,7 +88,7 @@ class CustomEvaluator:
                 for idx, env in enumerate(envs):
                     if idx >= self.max_frames:  # 只取前max_frames个场景绘制视频记录
                         break
-                    pixels.append(env.render_map())
+                    pixels.append(env.render())
                 recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
             pbar = tqdm.tqdm(total=self.max_step)
             for t in range(self.max_step):
@@ -119,7 +119,7 @@ class CustomEvaluator:
                         if idx >= self.max_frames:
                             break
                         if not dones[idx]:
-                            pixels[idx] = env.render_map()
+                            pixels[idx] = env.render()
                     recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
                 if all(dones):
                     break
