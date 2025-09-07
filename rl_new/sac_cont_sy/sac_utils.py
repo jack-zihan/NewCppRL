@@ -16,11 +16,13 @@ from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.record import VideoRecorder
 from rl_new.sac_cont_sy.env_utils import make_environment, make_single_environment, make_drop_pixels_eval_environment
+from functools import partial
+from torchrl.record import VideoRecorder
 
-
-def dump_video(module):
+def dump_video(module, step):
     """Helper function to dump video from VideoRecorder."""
     if isinstance(module, VideoRecorder):
+        module.iter = step  # 用训练迭代 i 作为视频 step
         module.dump()
 
 def log_metrics(logger, metrics, step):
@@ -236,7 +238,7 @@ def evaluate_policy_parallel(actor_critic, cfg, train_device, logger, step):
         eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
                                         auto_cast_to_device=True, break_when_all_done=True)  # 确保所有环境完成完整episode
     # 3. 视频上传（如果配置了）
-    if cfg.logger.eval_video: eval_env.apply(dump_video)
+    if cfg.logger.eval_video: eval_env.apply(partial(dump_video, step=step))
 
     # 4. 从"next"字典的最后一帧提取所有数据
     episode_rewards = eval_rollout["next", "episode_reward"][:, -1].cpu().numpy() # RewardSum和StepCounter的输出在"next"中
