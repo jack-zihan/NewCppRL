@@ -8,7 +8,7 @@ in_server: True
 
 # ============ 环境配置 ============
 env:
-  env_id: "NewPasture-v2"  # 可选: NewPasture-v1, v2, v3, v4, v5
+  env_id: "NewPasture-v4"  # 可选: NewPasture-v1, v2, v3, v4, v5
   # v1: 基础环境（含杂草）
   # v2: APF增强环境（默认）
   # v3: 多尺度特征环境
@@ -23,10 +23,10 @@ env:
 
 # ============ 数据收集配置 ============
 collector:
-  total_frames: 4_000_000
+  total_frames: -1 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
   frames_per_batch: 1000 #20  # 同步模式使用较小批次
-  init_random_frames: 50_000  # 减少初始随机帧
-  update_freq: 10_000  # 每10000帧更新一次策略
+  init_random_frames: 20_000 # 50_000  # 减少初始随机帧
+  update_freq: 1000 # 10_000  # 每10000帧更新一次策略
   env_per_collector: 100 #100 # 16
 
   # 多GPU/CPU收集配置（简洁直接）
@@ -55,7 +55,7 @@ training:
 
 # ============ 回放缓冲区 ============
 buffer:
-  buffer_size: 500_000 #100_000 #500_000 # 100_000 # Small buffer size to keep only recent elements
+  buffer_size: 100_000 #500_000 # 100_000 # Small buffer size to keep only recent elements
   batch_size: 1024 #1024  # 同步模式使用较小批次
   pin_memory: true        # 锁定内存优化
   prefetch: 0 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
@@ -104,18 +104,18 @@ logger:
   backend: wandb        # wandb, tensorboard, null
   project_name: SAC_2025
   group_name: Weed
-  exp_name: Weed_v2_Recovery
+  exp_name: Weed_v2_Recovery_new_config
   model_name: ContinuousSAC
 
   mode: online          # online, offline
-  test_interval: 25_000  # 时弃用，由于模型保存基于评估，使用eval_interval 同时作为checkpoint保存间隔
+  test_interval: 3000 #25_000  # 时弃用，由于模型保存基于评估，使用eval_interval 同时作为checkpoint保存间隔
   test_ckpt_num: 10      # 保留最优的5个checkpoint
-  log_freq: 5000      # 日志记录频率（帧数）
+  log_freq: 1000 # 5000      # 日志记录频率（帧数）
 
   # 详细评估配置
-  eval_interval: 25_000   # 评估频率（帧数）
+  eval_interval: 3000 # 25_000   # 评估频率（帧数）
   eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
-  eval_max_steps: 10000   # 每个episode最大步数
+  eval_max_steps: 5000 #10000   # 每个episode最大步数
   eval_video: true       # 录制2x2网格视频
   eval_video_skip: 100     # 视频跳帧（减小文件大小）
   show_progress: true
