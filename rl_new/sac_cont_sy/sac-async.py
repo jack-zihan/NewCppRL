@@ -291,10 +291,10 @@ def main(cfg: DictConfig):
             eval_interval = cfg.logger['eval_interval']
             if collected_frames >= init_random_frames and (i % eval_interval) == 0:
                 with timeit("eval"):
-                    eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
-                                                   cfg=cfg, logger=logger, step=i)
-                    # eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, train_device=train_device,
+                    # eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
                     #                                cfg=cfg, logger=logger, step=i)
+                    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, train_device=train_device,
+                                                   cfg=cfg, logger=logger, step=i)
                     metrics_to_log.update(eval_metrics)
                     # Checkpoint保存（基于评估奖励）
                     checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
