@@ -33,7 +33,7 @@ class SacEvaluator(CustomEvaluator):
 
     def get_actor(self,
                   pt_path: str) -> torch.nn.Module:
-        model = torch.load(pt_path).to(self.device)
+        model = torch.load(pt_path, weights_only=False).to(self.device)
         actor = model[0]
         return actor
 
