@@ -25,14 +25,14 @@ class HIFCreator:
 
     def generate(self, state: Dict[str, Any], rng: np.random.Generator) -> None:
         """
-        加载HIF地图并验证尺寸匹配， 场景模式：从scenario_directory加载，普通模式：从{map_dir}/hif/human_intent_field_{map_id+1}.npy加载
+        加载HIF地图并验证尺寸匹配， 场景模式：从scenario_directory加载，普通模式：从{map_dir}/hif/human_intent_field_{field_id}.npy加载
         """
         dimensions = state['env_state'].get_static_info('dimensions')
         scenario_directory = state['options'].get('scenario_directory')
 
         # 根据模式选择加载方式
         state['maps_dict']['hif'] = self._load_from_directory(scenario_directory, dimensions) if scenario_directory else \
-            self._load_from_file(state['env_state'].get_static_info('map_id'), state['config'], dimensions)
+            self._load_from_file(state['env_state'].get_static_info('field_id'), state['config'], dimensions)
 
     def _load_from_directory(self, directory: Union[str, Path], dimensions: Tuple[int, int]) -> np.ndarray:
         """从场景目录加载HIF地图"""
@@ -44,10 +44,10 @@ class HIFCreator:
         return hif_map
 
 
-    def _load_from_file(self, map_id: Optional[int], config, dimensions: Tuple[int, int]) -> np.ndarray:
+    def _load_from_file(self, field_id: Optional[int], config, dimensions: Tuple[int, int]) -> np.ndarray:
         """从标准位置加载HIF地图， config.map_dir指向包含field/和hif/的父目录"""
         map_root = Path(config.get_absolute_map_dir())
-        hif_file = map_root / 'hif' / f'human_intent_field_{map_id + 1}.npy' # TODO: 图片是从1开始编号的，因此差1，以后有时间去除
+        hif_file = map_root / 'hif' / f'human_intent_field_{field_id}.npy'
 
         if not hif_file.exists(): raise FileNotFoundError(f"HIF file required but not found: {hif_file}\n")
 
@@ -91,27 +91,26 @@ class HIFCalculator(RewardCalculator):
     @staticmethod
     def _compute_angle_difference(agent_direction: float, hif_direction: float) -> float:
         """
-            计算无向场中agent朝向与HIF方向的角度差异
+        计算无向（轴向）场中 Agent 朝向与 HIF 线方向的角度差（度）。
 
-            坐标系映射关系：
-            - Agent系统：0°=3点钟(东), 90°=6点钟(南), 180°=9点钟(西), 270°=12点钟(北)
-            - HIF系统：0rad=9点钟(西), π/2rad=6点钟(南), πrad=3点钟(东)
-            - 转换原理：两系统相差180°相位
+        坐标与单位：
+        - Agent：图像坐标系（有向），0°=东，90°=南，顺时针递增，范围 [0, 360)，degree。
+        - HIF：数学坐标系（无向轴向），0rad=东，π/2rad=北，范围 [0, π), radius。
 
-            Args:
-                agent_direction: agent朝向，单位：度（Agent类保证[0,360)但此处防御性处理）
-                hif_direction: HIF期望方向，单位：弧度，范围[0,π]
-
-            Returns:
-                角度差异，单位：度，范围[0,90]（无向场最大差异为90°）
+        策略：将 HIF 从数学系轴向转换到 Agent 的图像系轴向（度），再计算轴向差：
+        - hif_axis_img_deg = (180 - degrees(hif_direction)) % 180
+        - delta = abs((agent_direction % 360) - hif_axis_img_deg) % 180
+        - 若 delta > 90，则 delta = 180 - delta（轴向折叠），最终 delta ∈ [0, 90]
         """
-        agent_direction_normalized = agent_direction % 360  # Step 1: 防御性归一化 - 确保agent方向在[0, 360)范围
-        hif_direction_degrees = np.degrees(hif_direction)  # Step 2: 单位转换 - HIF从弧度转为度
-        hif_in_agent_coordinates = (hif_direction_degrees + 180) % 360  # Step 3: 坐标系对齐 - 将HIF坐标系映射到Agent坐标系（180°相位差） HIF 0(9点钟) → Agent 180°, HIF π(3点钟) → Agent 0°
-        angular_difference = abs(agent_direction_normalized - hif_in_agent_coordinates)  # Step 4: 计算原始角度差
-        if angular_difference > 180: angular_difference = 360 - angular_difference  # Step 5: 周期性优化 - 选择最短路径角度 例如：350°和10°的差异应该是20°而不是340°
-        if angular_difference > 90: angular_difference = 180 - angular_difference  # Step 6: 无向场归一化 - 将[0,180]映射到[0,90] 在无向场中，相反方向(180°差)等价于同向(0°差)
-        return angular_difference
+
+        agent_direction_deg = float(agent_direction) % 360.0 # agent_direction本身就是度
+        hif_direction_deg = float(np.degrees(hif_direction)) # hif先弧度转为度再进行翻转坐标系操作
+        hif_direction_deg_image_coordinates = (180.0 - hif_direction_deg) % 180.0
+
+        # 计算图像系下的轴向差，并折叠到 [0, 90]
+        delta_deg = abs(agent_direction_deg - hif_direction_deg_image_coordinates) % 180.0
+        if delta_deg > 90.0: delta_deg = 180.0 - delta_deg
+        return float(delta_deg)
 
 
 class CppEnv(CppEnvV4):

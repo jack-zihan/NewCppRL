@@ -34,12 +34,12 @@ class FieldCreator:
         options = state['options']
         config = state['config']
 
-        # 统一的3元组返回值 - 两种模式都返回 (map, dimensions, map_id)
-        field_map, dimensions, map_id = self._load_from_directory(options['scenario_directory']) if options.get(
+        # 统一的3元组返回值 - 两种模式都返回 (map, dimensions, field_id)
+        field_map, dimensions, field_id = self._load_from_directory(options['scenario_directory']) if options.get(
             'scenario_directory') else self._load_from_file(options.get('map_id'), config, rng)
         
-        # 存储map_id到env_state供其他组件使用 (scenario模式为None)
-        state['env_state'].set_static_info('map_id', map_id)
+        # 存储field_id到env_state供其他组件使用 (scenario模式为None)
+        state['env_state'].set_static_info('field_id', field_id)
 
         # 提取几何信息, 并存入maps_dicts
         bounding_box, field_contours = self._extract_geometry(field_map)
@@ -55,7 +55,7 @@ class FieldCreator:
         """从预制场景目录加载田地地图"""
         field_map = load_map_from_directory(directory, 'field')
         dimensions = field_map.shape[::-1]  # (width, height)
-        return field_map, dimensions, None  # 场景模式没有map_id
+        return field_map, dimensions, None  # 场景模式没有field_id
 
     def _load_from_file(self, map_id: Optional[int], config, rng: np.random.Generator) -> Tuple[
         np.ndarray, Tuple[int, int], int]:
@@ -74,8 +74,11 @@ class FieldCreator:
         image = cv2.imread(str(map_files[map_id]))
         field_map = (image.sum(axis=-1) > 0).astype(np.uint8)
         dimensions = field_map.shape[::-1]  # (width, height)
+        
+        # 提取field文件名中的实际编号
+        field_id = int(map_files[map_id].stem.split('_')[1])
 
-        return field_map, dimensions, map_id
+        return field_map, dimensions, field_id
 
     def _extract_geometry(self, field_map: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
         """提取边界框和轮廓"""

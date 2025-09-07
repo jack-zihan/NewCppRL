@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "context7": {
+      "command": "python",
+      "args": [
+        "tools/mcp_context7_server.py",
+        "--root",
+        "."
+      ],
+      "env": {},
+      "transport": "stdio"
+    }
+  }
+}
+

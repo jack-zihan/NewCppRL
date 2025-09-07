@@ -15,7 +15,7 @@ from tqdm import tqdm
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.record import VideoRecorder
-from rl_new.sac_cont_sy.env_utils import make_environment, make_single_environment
+from rl_new.sac_cont_sy.env_utils import make_environment, make_single_environment, make_drop_pixels_eval_environment
 
 
 def dump_video(module):
@@ -226,38 +226,39 @@ def evaluate_policy_parallel(actor_critic, cfg, train_device, logger, step):
         eval_metrics: 评估指标字典
     """
     torchrl_logger.info(f"开始并行评估 - {cfg.logger.eval_episodes} episodes")
-    
+
     # 1. 复用make_environment获取eval_env（已配置正确的eval_episodes）
-    _, eval_env = make_environment(cfg, logger, train_device, train_device)
-    
+    # _, eval_env = make_environment(cfg, logger, train_device, eval_device=torch.device('cpu')) # drop pixels, 大大降低显存消耗
+    _, eval_env = make_drop_pixels_eval_environment(cfg, logger, train_device, eval_device=torch.device('cpu'))
+
     # 2. 执行rollout - 使用break_when_all_done确保所有环境完成
     with set_exploration_type(ExplorationType.DETERMINISTIC):
-        eval_rollout = eval_env.rollout( max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
+        eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
                                         auto_cast_to_device=True, break_when_all_done=True)  # 确保所有环境完成完整episode
     # 3. 视频上传（如果配置了）
     if cfg.logger.eval_video: eval_env.apply(dump_video)
-    
+
     # 4. 从"next"字典的最后一帧提取所有数据
     episode_rewards = eval_rollout["next", "episode_reward"][:, -1].cpu().numpy() # RewardSum和StepCounter的输出在"next"中
     episode_lengths = eval_rollout["next", "step_count"][:, -1].cpu().numpy()
-    
+
     # 5. completion_ratio也在"next"的observation中
     completion_ratios = None
     if "completion_ratio" in eval_rollout["next"].keys(): # 使用[-1]是安全的，因为rollout保存的是done时的数据（reset发生在保存之后）
         completion_ratios = eval_rollout["next", "completion_ratio"][:, -1].cpu().numpy()
-    
+
     # 6. 关闭环境
     eval_env.close()
-    
+
     # 7. 计算统计指标
     eval_metrics = { "eval/reward_mean": np.mean(episode_rewards), "eval/reward_min": np.min(episode_rewards),
         "eval/reward_max": np.max(episode_rewards), "eval/episode_length": np.mean(episode_lengths),}
-    
+
     # 添加completion_ratio统计（如果有）
     if completion_ratios is not None:
         eval_metrics["eval/completion_ratio"] = np.mean(completion_ratios)
         eval_metrics["eval/completion_ratio_max"] = np.max(completion_ratios)
-    
+
     torchrl_logger.info(f"并行评估完成 - 平均奖励: {eval_metrics['eval/reward_mean']:.2f}")
     return eval_metrics
 
@@ -353,134 +354,117 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
     eval_envs = []
     seeds = [cfg.seed + i for i in range(eval_episodes)]  # 固定种子确保可重复性
 
-    # 使用make_single_environment创建环境（在CPU上评估以节省GPU内存）
+    # 1. 使用make_single_environment创建环境（在CPU上评估以节省GPU内存）
     for seed in seeds:
         env = make_single_environment(cfg, device="cpu", seed=seed, from_pixels=eval_cfg['eval_video'])
         eval_envs.append(env)
 
-    # 设置多episode网格视频录制器（使用memmap避免内存溢出）
+    # 2. 设置多episode网格视频录制器（使用memmap避免内存溢出）
     recorder = None
     if eval_cfg.eval_video and logger is not None:
         max_frames = min(4, eval_episodes)  # 最多录制4个环境的视频
         recorder = LocalVideoRecorder(
-            device="cpu",  # 明确指定CPU设备
-            max_len=(eval_cfg.eval_max_steps * max_frames) // eval_cfg.eval_video_skip + 2,
-            use_memmap=True, make_grid=True, # 关键：启用内存映射，避免显存/内存溢出, 制作2x2网格视频
-            nrow=2, skip=1,fps=6)             # 2列网格, 不跳帧（评估时已经通过eval_video_skip控制）, # 视频帧率
+            device="cpu",  max_len=(eval_cfg.eval_max_steps * max_frames) // eval_cfg.eval_video_skip + 2, # 明确指定CPU设备
+            use_memmap=True, make_grid=True, nrow=2, skip=1,fps=6) # 关键：启用内存映射，避免显存/内存溢出, 制作2x2网格视频 # 2列网格, 不跳帧（评估时已经通过eval_video_skip控制）, # 视频帧率
 
-    with set_exploration_type(ExplorationType.DETERMINISTIC):  # 设置评估模式（无探索）
-        # 初始化统计
-        episode_rewards = [0.0] * eval_episodes
-        episode_lengths = [0] * eval_episodes
-        completion_ratios = [0.0] * eval_episodes
-        dones = [False] * eval_episodes
+    # 3. 进行各种数据和组件初始化
+    with set_exploration_type(ExplorationType.DETERMINISTIC):  #
+        # 初始化统计数据
+        episode_rewards, episode_lengths = [0.0] * eval_episodes, [0] * eval_episodes #
+        completion_ratios, dones = [0.0] * eval_episodes, [False] * eval_episodes
 
-        # Reset所有环境
+        # 初始化环境
         tds = []
         for env in eval_envs:
             td = env.reset()
             tds.append(td)
 
-        # 运行评估（带进度条）
+        # 初始化进度条与估计迭代器
         max_steps = eval_cfg['eval_max_steps']
         use_progress_bar = eval_cfg.show_progress
-        
-        # 创建进度条迭代器
+
         if use_progress_bar:
             pbar = tqdm(range(max_steps), desc="Evaluating", file=sys.stderr, leave=False)  # 输出到stderr避免干扰日志 # 完成后清除进度条
             step_iterator = pbar
         else:
             step_iterator = range(max_steps)
-        
+
+        # 4. rollout进行episode的数据统计
         for t in step_iterator:
-            # 收集未结束的环境的观察
             active_tds = []
             active_indices = []
             for idx, (td, done) in enumerate(zip(tds, dones)):
-                if not done:
+                if not done: # 收集未结束的环境的观察
                     active_tds.append(td)
                     active_indices.append(idx)
 
-            if not active_tds:
-                break
+            if not active_tds: break # 如果全部结束，停止估计
 
-            batch_td = torch.stack(active_tds) # 批量获取动作（CPU到GPU再回CPU的设备转换）
-
-            batch_td = batch_td.to(train_device) # 将观测移到GPU进行高效推理
+            # 策略推理action
+            batch_td = torch.stack(active_tds).to(train_device) # 批量获取动作（CPU到GPU再回CPU的设备转换）
             with torch.no_grad():
                 batch_td = actor_critic[0](batch_td).to("cpu")  # 使用actor获取动作, 将动作移回CPU执行（因为环境在CPU上）
 
-            # 执行动作并更新统计
+            # 环境执行动作并统计数据
             for i, (td, idx) in enumerate(zip(batch_td.unbind(0), active_indices)):
-                # 步进环境
-                next_td = eval_envs[idx].step(td)
-                tds[idx] = next_td
+                # 步进环境，获取完整的transition
+                transition = eval_envs[idx].step(td)
 
-                # 更新统计 - 从next子字典获取奖励和done
-                reward = next_td["next"]["reward"]
+                # 从transition的next子字典中提取统计信息
+                reward = transition["next"]["reward"]
                 if hasattr(reward, 'item'):
                     reward = reward.item()
                 episode_rewards[idx] += reward
                 episode_lengths[idx] += 1
 
                 # 检查结束 - done在next中表示下一状态是否结束
-                done = next_td["next"]["done"]
+                done = transition["next"]["done"]
                 if hasattr(done, 'item'):
                     done = done.item()
                 dones[idx] = done
 
                 # 获取completion_ratio（也在next中）
-                if "completion_ratio" in next_td["next"]:
-                    completion_ratios[idx] = next_td["next"]["completion_ratio"].item()
-            
+                if "completion_ratio" in transition["next"]:
+                    completion_ratios[idx] = transition["next"]["completion_ratio"].item()
+
+                # 使用step_mdp提取干净的下一状态，保存到tds[idx]，这确保tds[idx]始终是当前可观测状态，用于下一轮动作生成和视频录制
+                tds[idx] = eval_envs[idx].step_mdp(transition)
+
             # 更新进度条信息（每10步更新一次，避免频繁刷新）
             if use_progress_bar and t % 10 == 0:
-                # 计算实时统计
-                active_count = len(active_indices)
+                # 计算实时统计，并更新进度条
                 completed_count = sum(dones)
-                mean_reward = np.mean([r for r, d in zip(episode_rewards, dones) if d]) if completed_count > 0 else 0
                 current_mean = np.mean(episode_rewards)  # 当前所有episode的平均奖励
-                
-                # 更新进度条postfix
-                pbar.set_postfix({
-                    'active': f'{active_count}/{eval_episodes}',
-                    'done': completed_count,
-                    'reward': f'{current_mean:.2f}',
-                    'best': f'{max(episode_rewards):.2f}'
-                })
+
+                pbar.set_postfix({'done': completed_count, 'reward': f'{current_mean:.2f}',
+                                  'best': f'{max(episode_rewards):.2f}'})
 
             # 录制视频帧（如果启用）
             if recorder and (t + 1) % eval_cfg.eval_video_skip == 0:
-                pixels = []
-                for idx in range(min(4, eval_episodes)):
-                    if not dones[idx] and "pixels" in tds[idx]:
-                        pixels.append(tds[idx]["pixels"])
-                if pixels:
-                    recorder.apply(torch.stack(pixels, 0))
-    
-    # 关闭进度条
-    if use_progress_bar:
-        pbar.close()
+                pixels = [tds[i]["pixels"] for i in range(min(4, eval_episodes))] # 现在tds[idx]始终包含当前状态，可以直接读取pixels
+                stacked = torch.stack(pixels, 0)
+                recorder.apply(stacked)
 
-    # 关闭视频录制器并上传到wandb
-    if recorder:
-        vid_tensor = recorder.dump()
+                # 如果还报错则运行下面自己renderpixels
+                # pixels = [eval_envs[i].render() for i in range(min(4, eval_episodes))]
+                # recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
+
+        if use_progress_bar: pbar.close() # 关闭进度条
+
+        # 上传录制的视频
+        vid_tensor = None
+        if recorder:  vid_tensor = recorder.dump() # 关闭视频录制器并上传到wandb
         if vid_tensor is not None and logger is not None:
-            logger.log_video(f'eval_grid/step_{step}', vid_tensor, step=step)
+            logger.log_video('eval/video', vid_tensor, step=step) # 使用稳定的键名以便于W&B按step聚合
 
     # 关闭所有环境
     for env in eval_envs:
         env.close()
 
     # 计算统计指标
-    eval_metrics = {
-        "eval/reward_mean": np.mean(episode_rewards),
-        "eval/reward_std": np.std(episode_rewards),
-        "eval/reward_min": np.min(episode_rewards),
-        "eval/reward_max": np.max(episode_rewards),
-        "eval/episode_length": np.mean(episode_lengths),
-        "eval/episodes_completed": sum(dones),
-    }
+    eval_metrics = {"eval/reward_mean": np.mean(episode_rewards), "eval/reward_std": np.std(episode_rewards),
+                    "eval/reward_min": np.min(episode_rewards), "eval/reward_max": np.max(episode_rewards),
+                    "eval/episode_length": np.mean(episode_lengths), "eval/episodes_completed": sum(dones)}
 
     # 添加completion_ratio统计（如果有）
     if any(cr > 0 for cr in completion_ratios):
@@ -488,5 +472,4 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
         eval_metrics["eval/completion_ratio_max"] = np.max(completion_ratios)
 
     torchrl_logger.info(f"评估完成 - 平均奖励: {eval_metrics['eval/reward_mean']:.2f}")
-
     return eval_metrics

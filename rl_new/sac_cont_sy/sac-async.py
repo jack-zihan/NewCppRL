@@ -53,7 +53,8 @@ from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
 from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatten, get_actor_actions,
-                                          generate_exp_name, evaluate_policy_parallel, evaluate_policy, CheckpointManager, log_metrics)
+                                          generate_exp_name, evaluate_policy_parallel,  CheckpointManager, log_metrics,
+                                          evaluate_policy, evaluate_policy_parallel)
 from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 
@@ -290,12 +291,14 @@ def main(cfg: DictConfig):
             eval_interval = cfg.logger['eval_interval']
             if collected_frames >= init_random_frames and (i % eval_interval) == 0:
                 with timeit("eval"):
-                    eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
-                                                   cfg=cfg, logger=logger, step=collected_frames)
+                    # eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
+                    #                                cfg=cfg, logger=logger, step=i)
+                    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, train_device=train_device,
+                                                   cfg=cfg, logger=logger, step=i)
                     metrics_to_log.update(eval_metrics)
                     # Checkpoint保存（基于评估奖励）
                     checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
-                                                    step=collected_frames)
+                                                    step=i)
                     torchrl_logger.info(f"Eval Logs: {metrics_to_log}") # 显示估计进度
 
             if logger is not None:

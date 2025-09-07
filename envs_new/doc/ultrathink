@@ -1,0 +1,84 @@
+人类意图场（HIF）方向一致性与v5正则项实现核查报告（ultrathink）
+
+一、结论摘要
+- 两套HIF生成管线（/home/lzh/HIFS 纹理提取 与 envs_new/tools 形状/性质提取）在“数据格式与数值范围”层面完全一致：二维 float32，背景为 -1.0，前景角度 ∈ [0, π)。
+- 两套管线在“角度基准”的数值表示存在180°的相位差：
+  - HIFS：标准图像坐标角度（0=东，π/2=南，π=西），无向（mod π）。
+  - envs_new/tools：保存为 HIF 角度（0=西，π/2=南，π=东），无向（mod π）。
+  由于均按“无向场（mod π）”编码，上述相位差对“线方向”语义不构成冲突。
+- Cpp 环境中 Agent 朝向是以度为单位的图像坐标系：0°=东，90°=南，180°=西，270°=北。
+- v5 HIF 正则计算（envs_new/cpp_env_v5.py: HIFCalculator）对“Agent 朝向（度）× HIF（弧度，mod π）”的差异做了严谨对齐：
+  - 将 HIF 从弧度转度并统一相位（+180°），再做最小环向差（≤180°），再做“无向归一化”（≤90°）。
+  - 即使输入的 HIF 源采用 0=东（HIFS）或 0=西（envs_new/tools），最终差值均按“线方向”一致处理，不会错配。
+
+二、代码阅读要点（与证据）
+1) v4/v5 环境差异与HIF注入
+- v4（envs_new/cpp_env_v4.py）：去除 weed，任务变为 field 覆盖，使用 FieldCoverageUpdater 覆盖本体；观察通道：field、obstacle、(trajectory)。
+- v5（envs_new/cpp_env_v5.py）：在 v4 基础上新增 HIF：
+  - HIFCreator 负责加载 hif/…/human_intent_field_{id}.npy 或场景目录 map_hif.npy（尺寸严格匹配）。
+  - 观察通道新增 hif，pad 值为 -1.0（无引导）。
+  - 奖励系统 add_calculator('hif', HIFCalculator)。
+
+2) Agent 朝向定义（度）与动力学
+- envs_new/components/entity/agent.py
+  - control(): 将 steer 加到 direction，位置增量为 (cos(rad), sin(rad))，可直接推得 0°=东、90°=南、180°=西、270°=北。
+- envs_new/components/dynamics/environment_dynamics.py
+  - AgentUpdater 将 agent_direction 以“度”写入 EnvironmentState（用于奖励计算）。
+
+3) 观测生成与 HIF 通道 pad
+- envs_new/components/observation/observation_generator.py
+  - _get_observation_maps()（v5覆写）对 hif 通道 pad=-1.0；
+  - image_utils.extract_ego_patch() 先按每通道 pad 值扩边再旋转裁切，HIF pad=-1.0 能稳定保留“无引导”语义（观察输入层面与奖励无关）。
+
+三、两套 HIF 生成管线：数据格式与角度定义
+1) 纹理提取（/home/lzh/HIFS）
+- orientation_field_ui.py
+  - compute_orientation_confidence(): 角度 angles=linspace(0, π, endpoint=False)；在掩码外设为 -1；输出 dtype=float32。
+  - 可视化/矢量叠加使用 (u,v)=(cos(θ), sin(θ))：θ=0 箭头向右（东），θ=π/2 向下（南），θ=π 向左（西）。即“标准图像角度”。
+  - 非极大值抑制等处理亦按“无向（mod π）”实现（差值取 min(Δ, π-Δ)）。
+- 保存：save_results() 输出 orientation_map.npy（float32，-1 背景，前景 [0, π)）。
+
+2) 形状/性质提取（envs_new/tools/generate_hif_from_field_shape.py）
+- 关键流程：
+  - 从 field mask 提取边界/距离场 → 切线方向 → 标准角 θ_std（0=东，π/2=南）。
+  - 再映射到 HIF 角：θ_hif=(π-θ_std) mod π，得到“0=西，π/2=南，π=东”的无向角度。
+  - 背景填 -1.0；保存至 map_dir/hif/human_intent_field_{id}.npy。
+- 数据格式：float32，前景 [0, π)，背景 -1.0，与 HIFS 一致。
+
+四、角度数值在区间内的“方向语义”一致性
+- 二者都采用“无向场（mod π）”，即 θ 与 θ+π 表示同一条线方向。
+- HIFS 使用“标准角度 0=东”，而 tools 使用“0=西”的等效相位；由于 mod π，无论保存为 0 还是 π，最终数值都会折叠回 [0, π) 区间内且代表同一条线的朝向。
+- 因此：
+  - 数据格式：一致；
+  - 数值范围：一致；
+  - 每个数值在区间内的“线方向”含义：一致（仅相位不同，且在无向定义下等价）。
+
+五、v5 HIF 正则（方向差惩罚）正确性核查
+位置：envs_new/cpp_env_v5.py → HIFCalculator
+核心实现（要点化复述）：
+1) 取 agent_direction（度）与 hif_map[y, x]（弧度）在“当前格/上一步格”，并按 0.3/0.7 加权。
+2) _compute_angle_difference(agent_dir_deg, hif_dir_rad):
+   - agent_dir 正规化至 [0,360)。
+   - HIF 弧度转度：hif_deg=degrees(hif_rad)。
+   - 坐标系对齐：hif_in_agent=(hif_deg+180) % 360（假定 HIF 0=西 → 代理系 180°）。
+   - 角差取最短环向：Δ=min(Δ, 360-Δ) ≤ 180°。
+   - 无向场归一：若 Δ>90°，Δ=180°-Δ → Δ ∈ [0,90]（将反向视作同向）。
+   - 返回 Δ（度）。
+3) 奖励返回 -coef*(0.3*Δ_cur + 0.7*Δ_last)。
+
+正确性分析：
+- 适配 HIF 相位差：若 HIF 源是 0=西（tools），+180°恰好映射到 Agent 系；若 HIF 源是 0=东（HIFS），+180°会将“东”映到“西”，但“无向归一”步骤把 180° 视为 0°，因此与期望等价，不会错配。
+- 单位一致：Agent 用度、HIF 用弧度，函数内部显式转换，避免单位错用。
+- 网格索引一致：hif_map[y, x] 与 Agent position (x,y) 的整数化索引匹配 numpy 的行列顺序（行y、列x）。
+- 背景判定：hif_map[y, x] < 0 时不计惩罚，避免非场区干扰。
+
+六、潜在风险与建议
+- 观测通道中的 HIF 经过旋转插值（cv2.warpAffine 默认线性），pad=-1.0 经插值后在边缘会出现介于[-1,0) 的值；这不影响奖励（奖励读取全局 hif_map），但如需“观测中严格二值背景”，可为 HIF 通道单独使用最近邻插值或旋转前扩大 padding。
+- 如未来引入“有向场”（区分 0 与 π），则需统一 HIF 的角度基准（推荐统一到“标准角：0=东”），并去掉“无向归一”步骤或改为有向差（例如直接用向量点积）。当前实现严格基于“无向”假设，符合现有两套管线。
+- 若需直接使用 HIFS 结果作为 scenario 目录输入，应将其保存为 map_hif.npy（与场景分发一致），或按 v5 约定标准化命名为 hif/human_intent_field_{id}.npy 并与 field_{id}.png 尺寸一致。
+
+七、结论
+- 两套 HIF 生成与 v5 环境消费端在“格式、范围、语义（无向）”上是对齐的。数值相位差已被 HIFCalculator 的对齐与“无向归一”完全吸收，不会造成方向正则误差。
+- Cpp Agent 朝向、索引、单位处理均与 HIF 正则计算一致。
+- 现有实现满足“纯覆盖 + 人类意图方向引导”的定义与奖励设计目标，无需代码修复；如要进一步严控可视化或探索“有向场”，可按“潜在风险与建议”推进。
+
