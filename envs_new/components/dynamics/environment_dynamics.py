@@ -214,7 +214,7 @@ class WeedTaskStatusUpdater(Updater):
         # 更新步数并检查各种终止条件
         current_step = env_state.current_step + 1
         timeout = current_step >= env_state.max_steps
-        finished = env_state.finished or env_state.crashed or timeout or self._is_task_finished(state)
+        finished = env_state.finished or self._is_task_finished(state)
 
         # 统一更新所有状态标志
         env_state.update_state(current_step=current_step, finished=finished, timeout=timeout)
