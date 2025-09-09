@@ -29,6 +29,24 @@ def log_metrics(logger, metrics, step):
     for metric_name, metric_value in metrics.items():
         logger.log_scalar(metric_name, metric_value, step)
 
+def setup_torch_cache():
+    # 设置缓存目录（确保有写权限）
+    os.environ['TORCHINDUCTOR_CACHE_DIR'] = '/root/.cache/torchinductor'  # 主缓存目录
+    os.environ['TORCHINDUCTOR_FX_GRAPH_CACHE'] = '1'  # 启用 FX 图缓存
+    os.environ['TORCHINDUCTOR_AUTOGRAD_CACHE'] = '1'  # 启用 AOTAutograd 缓存
+    os.environ['TRITON_CACHE_DIR'] = '/root/.cache/triton'  # Triton 缓存目录
+
+    # 创建缓存目录
+    os.makedirs('/root/.cache/torchinductor', exist_ok=True)
+    os.makedirs('/root/.cache/torchinductor/fxgraph', exist_ok=True)
+    os.makedirs('/root/.cache/torchinductor/aotautograd', exist_ok=True)
+    os.makedirs('/root/.cache/triton', exist_ok=True)
+
+    # 启用缓存
+    torch._inductor.config.fx_graph_cache = True  # 这个属性仍然有效
+    torch._inductor.config.force_disable_caches = False  # 确保不禁用缓存
+    torch._dynamo.config.cache_size_limit = 256  # 缓存条目数限制
+    torch._dynamo.config.accumulated_cache_size_limit = 256  # 累积缓存限制
 
 def generate_exp_name(model_name: str, experiment_name: str) -> str:
     """Generates an ID (str) for the described experiment using UUID and current date."""
@@ -475,3 +493,5 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
 
     torchrl_logger.info(f"评估完成 - 平均奖励: {eval_metrics['eval/reward_mean']:.2f}")
     return eval_metrics
+
+

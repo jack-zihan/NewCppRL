@@ -174,7 +174,7 @@ class CppEnvBase(gym.Env):
         # Generate info using extractable method
         info = self._get_step_info()
 
-        return observation, np.array(reward), np.bool_(terminated), truncated, info
+        return observation, float(reward), bool(terminated), bool(truncated), info
     
     def _get_step_info(self) -> Dict[str, Any]:
         """

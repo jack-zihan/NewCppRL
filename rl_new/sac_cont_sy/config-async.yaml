@@ -55,7 +55,7 @@ training:
 
 # ============ 回放缓冲区 ============
 buffer:
-  buffer_size: 500_000 # 100_000 # Small buffer size to keep only recent elements
+  buffer_size: 10_000 # 400_000 100_000 # Small buffer size to keep only recent elements
   batch_size: 1024 #1024  # 同步模式使用较小批次
   pin_memory: true        # 锁定内存优化
   prefetch: 0 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
@@ -97,7 +97,7 @@ compile:
   enable: false # true           # 启用torch.compile（5-10x加速）
   mode: # reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
   warmup: 2             # compile_with_warmup的预热步数
-  cudagraphs: true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+  cudagraphs: false # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
 
 # ============ 日志配置 ============
 logger:

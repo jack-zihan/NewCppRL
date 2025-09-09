@@ -6,23 +6,6 @@ from __future__ import annotations
 
 import os
 import torch
-# 设置缓存目录（确保有写权限）
-os.environ['TORCHINDUCTOR_CACHE_DIR'] = '/root/.cache/torchinductor'  # 主缓存目录
-os.environ['TORCHINDUCTOR_FX_GRAPH_CACHE'] = '1'  # 启用 FX 图缓存
-os.environ['TORCHINDUCTOR_AUTOGRAD_CACHE'] = '1'  # 启用 AOTAutograd 缓存
-os.environ['TRITON_CACHE_DIR'] = '/root/.cache/triton'  # Triton 缓存目录
-
-# 创建缓存目录
-os.makedirs('/root/.cache/torchinductor', exist_ok=True)
-os.makedirs('/root/.cache/torchinductor/fxgraph', exist_ok=True)
-os.makedirs('/root/.cache/torchinductor/aotautograd', exist_ok=True)
-os.makedirs('/root/.cache/triton', exist_ok=True)
-
-# 启用缓存
-torch._inductor.config.fx_graph_cache = True  # 这个属性仍然有效
-torch._inductor.config.force_disable_caches = False # 确保不禁用缓存
-torch._dynamo.config.cache_size_limit = 256  # 缓存条目数限制
-torch._dynamo.config.accumulated_cache_size_limit = 256  # 累积缓存限制
 
 import sys
 import time
@@ -54,7 +37,7 @@ from torchrl.record.loggers import get_logger
 from rl_new.sac_cont_sy.model_utils import make_sac_models
 from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatten, get_actor_actions,
                                           generate_exp_name, evaluate_policy_parallel,  CheckpointManager, log_metrics,
-                                          evaluate_policy, evaluate_policy_parallel)
+                                          evaluate_policy, evaluate_policy_parallel, setup_torch_cache)
 from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 
@@ -80,7 +63,7 @@ def main(cfg: DictConfig):
         # train_device, collector_devices = setup_devices(cfg) # 双缓冲才开启设备选择
         # torchrl_logger.info(f"训练设备: {train_device}")
         # torchrl_logger.info(f"收集设备: {collector_devices[:5]}... (共{len(collector_devices)}个)")
-        train_device, collector_devices = (torch.device("cuda:0"), torch.device("cuda:1")) if cfg.in_server else (torch.device("cpu"), torch.device("cuda:0"))
+        train_device, collector_devices = (torch.device("cuda:0"), torch.device("cuda:1")) if cfg.in_server else (torch.device("cpu"), torch.device("cpu"))
         torchrl_logger.info(f"训练设备: {train_device}, 收集设备: {collector_devices}")
 
         # 设置随机种子
@@ -89,6 +72,7 @@ def main(cfg: DictConfig):
 
         # 确定编译模式
         if cfg.compile.enable:
+            if cfg.in_server: setup_torch_cache()
             compile_mode = (cfg.compile.mode or ("default" if cfg.compile.cudagraphs else "reduce-overhead"))
             compile_mode_collector = compile_mode
         else:

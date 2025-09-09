@@ -189,3 +189,4 @@ def make_drop_pixels_eval_environment(cfg, logger=None, train_device="cpu", eval
     # 3) 构建最终评估环境
     eval_env = TransformedEnv(eval_parallel, trsf)
     return None, eval_env
+
