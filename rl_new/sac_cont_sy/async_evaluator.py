@@ -2,6 +2,7 @@
 异步评估管理器 - 支持并行评估和顺序返回
 基于ProcessPoolExecutor实现，遵循Less is More设计原则
 """
+import itertools
 from concurrent.futures import ProcessPoolExecutor, Future
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
@@ -27,6 +28,10 @@ class AsyncEvaluator:
             max_workers: 最大并行评估进程数，默认为2
         """
         self.executor = ProcessPoolExecutor(max_workers=max_workers)
+        self.max_workers = max_workers
+        
+        # 进度条position分配（循环复用1~max_workers）
+        self._position_counter = itertools.count(1)  # 无限计数器从1开始
         
         # 顺序控制相关数据结构
         self.submitted_steps: List[int] = []  # 记录提交顺序 [1000, 2000, 3000...]
@@ -49,14 +54,17 @@ class AsyncEvaluator:
         Returns:
             Future对象，可用于查询任务状态
         """
-        # 提交评估任务到进程池
-        future = self.executor.submit(eval_func, model_path, cfg, step)
+        # 循环分配进度条position: 1, 2, ..., max_workers, 1, 2, ...
+        position = (next(self._position_counter) - 1) % self.max_workers + 1
+        
+        # 提交评估任务到进程池，传入position参数
+        future = self.executor.submit(eval_func, model_path, cfg, step, position)
         
         # 记录提交信息
         self.submitted_steps.append(step)
         self.pending_futures[step] = future
         
-        torchrl_logger.info(f"提交评估任务: step={step}, 当前排队任务数: {len(self.pending_futures)}")
+        torchrl_logger.info(f"提交评估任务: step={step}, position={position}, 当前排队任务数: {len(self.pending_futures)}")
         return future
     
     def get_evaluate_results(self) -> List[Dict[str, Any]]:

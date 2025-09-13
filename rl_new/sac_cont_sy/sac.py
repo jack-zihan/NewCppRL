@@ -28,6 +28,7 @@ import torch
 import torch.cuda
 import numpy as np
 import gymnasium as gym
+from threading import RLock
 
 from pathlib import Path
 from functools import partial
@@ -66,6 +67,9 @@ def main(cfg: DictConfig):  # noqa: F821
     with tempfile.TemporaryDirectory(dir=temp_dir) as tmpdir:
         # ============ 1. 创建实验目录和基础设置 ============
         exp_name = generate_exp_name(cfg.logger.model_name, cfg.logger.exp_name)
+
+        # 设置多线程安全的tqdm锁
+        tqdm.tqdm.set_lock(RLock())
 
         # 设备配置
         train_device, collector_devices = (torch.device("cuda:0"), torch.device("cuda:0")) if cfg.in_server else (
@@ -166,7 +170,13 @@ def main(cfg: DictConfig):  # noqa: F821
 
         # Main loop
         collected_frames = 0
-        pbar = tqdm.tqdm(total=cfg.collector.total_frames)
+        pbar = tqdm.tqdm(
+            total=cfg.collector.total_frames,
+            desc="Training",
+            position=0,          # 固定在顶部
+            leave=True,          # 训练结束后保留
+            dynamic_ncols=True   # 适应终端宽度
+        )
 
         init_random_frames = cfg.collector.init_random_frames
         frames_per_batch = cfg.collector.frames_per_batch

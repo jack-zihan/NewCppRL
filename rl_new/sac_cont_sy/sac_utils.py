@@ -226,7 +226,7 @@ def get_actor_actions(actor, obss, device):
 
 
 # =========== 新版并行评估策略 ============
-def evaluate_policy_parallel(actor_critic, cfg, logger, step):
+def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1):
     """
     并行优化版评估函数 - 利用TorchRL的rollout机制
     
@@ -238,6 +238,7 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step):
         train_device: 训练设备
         logger: 日志记录器
         step: 当前训练步数
+        position: 进度条显示位置
         
     Returns:
         eval_metrics: 评估指标字典
@@ -250,15 +251,23 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step):
 
     # 2. 执行rollout - 使用break_when_all_done确保所有环境完成
     with set_exploration_type(ExplorationType.DETERMINISTIC):
-        # 创建进度条（disable参数让它在关闭时变成no-op，无需if判断）
-        # pbar = tqdm(total=cfg.logger.eval_max_steps, desc="Evaluating", disable=not cfg.logger.show_progress)
+        # 创建进度条（使用传入的position，评估完成后自动清除）
+        pbar = tqdm(
+            total=cfg.logger.eval_max_steps, 
+            desc=f"Eval step={step}", 
+            position=position,           # 使用传入的position
+            leave=False,                 # 评估完成后自动清除
+            dynamic_ncols=True,         # 适应终端宽度
+            disable=not cfg.logger.show_progress
+        )
 
         eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
-                                        auto_cast_to_device=True, break_when_all_done=True,)  # 确保所有环境完成完整episode
-                                        # callback=lambda env, td: (pbar.update(1),
-                                        #                           pbar.set_postfix(done=int(td["done"].sum()),
-                                        #                                            step=step, reward=td[
-                                        #                                   "episode_reward"].mean(), )))
+                                        auto_cast_to_device=True, break_when_all_done=True,  # 确保所有环境完成完整episode
+                                        callback=lambda env, td: (pbar.update(1),
+                                                                  pbar.set_postfix(done=int(td["done"].sum()),
+                                                                                   step=step, reward=td[
+                                                                          "episode_reward"].mean(), completion_ratio=td[
+                                                                          "completion_ratio"].mean())))
         # pbar.close()
     # 3. 视频上传（如果配置了）
     if cfg.logger.eval_video: eval_env.apply(partial(dump_video, step=step))
@@ -536,7 +545,7 @@ def log_evaluate_results(results, checkpoint_dir, logger=None):
             torchrl_logger.info(f"模型已保存: {new_model_filename}")
 
 
-def evaluate_policy_standalone(model_path: str, cfg, step: int):
+def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 1):
     """
     独立评估函数 - 在子进程中运行，使用CSVLogger保存视频到本地
     
@@ -544,6 +553,7 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int):
         model_path: 模型文件路径
         cfg: 完整配置
         step: 当前训练步数
+        position: 进度条显示位置
         
     Returns:
         dict: 包含metrics、视频路径和关键指标的字典
@@ -568,7 +578,7 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int):
     )
 
     # 执行评估
-    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, cfg=cfg, logger=csv_logger, step=step)
+    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, cfg=cfg, logger=csv_logger, step=step, position=position)
 
     # 提取关键指标（completion_ratio 可能不存在，做降级）
     reward_mean = float(eval_metrics['eval/reward_mean'])
