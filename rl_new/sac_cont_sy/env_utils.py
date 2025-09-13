@@ -90,7 +90,7 @@ def make_single_environment(cfg, device="cpu", seed=None, from_pixels=False):
 # ====================================================================
 # Evaluation-only env with VideoRecorder + DropPixels
 # --------------------------------------------------------------------
-def make_drop_pixels_eval_environment(cfg, logger=None, train_device="cpu", eval_device="cpu"):
+def make_drop_pixels_eval_environment(cfg, logger=None, eval_device="cpu"):
     """
     构建仅用于评估的环境：
     - 环境放在 eval_device（建议 CPU），以便 rollouts 的 TensorDict 堆叠在内存而非显存。
@@ -178,7 +178,7 @@ def make_drop_pixels_eval_environment(cfg, logger=None, train_device="cpu", eval
 
     if cfg.logger.eval_video and logger is not None: # KeepLastPixels -> VideoRecorder -> DropPixels
         trsf.insert(0, KeepLastPixels())
-        trsf.insert(1, VideoRecorder(logger=logger, tag="rendering/test", in_keys=["pixels"],
+        trsf.insert(1, VideoRecorder(logger=logger, tag="eval/video", in_keys=["pixels"],
                                      make_grid=True, skip=cfg.logger.eval_video_skip))
         trsf.insert(2, DropPixels())
     else:

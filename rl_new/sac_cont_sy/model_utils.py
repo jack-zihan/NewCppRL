@@ -114,7 +114,10 @@ def make_sac_models(env, device="cpu"):
         td = env.fake_tensordict().to(device)
         for net in actor_critic:
             net(td)
-    
+    # 清理dummy环境
+    env.close()
+    del env
+
     return actor_critic
 
 

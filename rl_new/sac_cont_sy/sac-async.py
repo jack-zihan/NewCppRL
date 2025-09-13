@@ -1,5 +1,5 @@
 """
-SAC同步训练脚本 (sync version)
+SAC异步训练脚本 (async version)
 基于数据收集批次的同步训练模式
 """
 from __future__ import annotations
@@ -31,16 +31,17 @@ from torchrl._utils import compile_with_warmup, logger as torchrl_logger, timeit
 from torchrl.collectors import MultiaSyncDataCollector, aSyncDataCollector
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
-from torchrl.data import LazyMemmapStorage, LazyTensorStorage,TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
+from torchrl.data import LazyMemmapStorage, LazyTensorStorage, TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
 from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
 from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatten, get_actor_actions,
-                                          generate_exp_name, evaluate_policy_parallel,  CheckpointManager, log_metrics,
-                                          evaluate_policy, evaluate_policy_parallel, setup_torch_cache)
+                                          generate_exp_name, evaluate_policy_parallel, CheckpointManager, log_metrics,
+                                          evaluate_policy, evaluate_policy_parallel, setup_torch_cache,
+                                          evaluate_policy_standalone, log_evaluate_results)
+from rl_new.sac_cont_sy.async_evaluator import AsyncEvaluator
 from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
-
 
 torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能
 tensordict.nn.functional_modules._exclude_td_from_pytree().set()
@@ -63,7 +64,8 @@ def main(cfg: DictConfig):
         # train_device, collector_devices = setup_devices(cfg) # 双缓冲才开启设备选择
         # torchrl_logger.info(f"训练设备: {train_device}")
         # torchrl_logger.info(f"收集设备: {collector_devices[:5]}... (共{len(collector_devices)}个)")
-        train_device, collector_devices = (torch.device("cuda:0"), torch.device("cuda:1")) if cfg.in_server else (torch.device("cpu"), torch.device("cpu"))
+        train_device, collector_devices = (torch.device("cuda:0"), torch.device("cuda:1")) if cfg.in_server else (
+            torch.device("cpu"), torch.device("cpu"))
         torchrl_logger.info(f"训练设备: {train_device}, 收集设备: {collector_devices}")
 
         # 设置随机种子
@@ -83,7 +85,8 @@ def main(cfg: DictConfig):
         logger = None
         if cfg.logger.backend:
             logger = get_logger(
-                logger_type=cfg.logger.backend, experiment_name=exp_name, logger_name=exp_name, # logger_name在wandb不显示，主要影响本地存储名字
+                logger_type=cfg.logger.backend, experiment_name=exp_name, logger_name=exp_name,
+                # logger_name在wandb不显示，主要影响本地存储名字
                 wandb_kwargs={"mode": cfg.logger.mode, "config": dict(cfg),
                               "project": cfg.logger.project_name, "group": cfg.logger.group_name, "name": exp_name},
             )
@@ -93,11 +96,15 @@ def main(cfg: DictConfig):
         checkpoint_manager = CheckpointManager(save_dir=checkpoint_dir, max_checkpoints=cfg.logger.test_ckpt_num)
         torchrl_logger.info(f"Checkpoint将保存到: {checkpoint_dir}")
 
+        # 初始化异步评估器
+        async_evaluator = AsyncEvaluator(max_workers=2)
+        torchrl_logger.info("初始化异步评估器 (max_workers=2)")
+
         # ============ 3. 创建模型 ============
         # 使用配置中的环境ID创建模型
         if cfg.pretrained_model:
             torchrl_logger.info(f"加载预训练模型: {cfg.pretrained_model}")
-            actor_critic = torch.load(cfg.pretrained_path, map_location=train_device)
+            actor_critic = torch.load(cfg.pretrained_path, map_location=train_device, weights_only=False)
 
             # 为探索策略创建副本
             exploration_actor_critic = torch.load(cfg.pretrained_path, map_location=collector_devices)
@@ -107,18 +114,18 @@ def main(cfg: DictConfig):
             torchrl_logger.info(f"创建环境: {cfg.env.env_id}")
             dummy_env = make_train_environment(cfg, device="cpu")
 
-            actor_critic = make_sac_models(dummy_env, device=train_device) # 在正确设备上创建模型（关键：传递device参数）
+            actor_critic = make_sac_models(dummy_env, device=train_device)  # 在正确设备上创建模型（关键：传递device参数）
             exploration_actor_critic = make_sac_models(dummy_env, device=collector_devices)
-            exploration_actor_critic[0].load_state_dict(actor_critic[0].state_dict()) # 同步权重
+            exploration_actor_critic[0].load_state_dict(actor_critic[0].state_dict())  # 同步权重
             exploration_policy = exploration_actor_critic[0]  # 提取 actor 用于探索
-            dummy_env.close() # 清理
+            dummy_env.close()  # 清理
             del dummy_env
         # ============ 4. 创建回放缓冲区 ============
         replay_buffer = TensorDictReplayBuffer(
-            pin_memory=cfg.buffer.pin_memory, prefetch=cfg.buffer.prefetch, shared=False, #
+            pin_memory=cfg.buffer.pin_memory, prefetch=cfg.buffer.prefetch, shared=False,  #
             # storage=LazyMemmapStorage(max_size=cfg.buffer.buffer_size, scratch_dir=tmpdir),
 
-            storage = LazyTensorStorage(max_size=cfg.buffer.buffer_size, device=train_device),
+            storage=LazyTensorStorage(max_size=cfg.buffer.buffer_size, device=train_device),
             # 是LazyMemmapStorage所以不需要replay_buffer.append_transform(lambda td: td.to(device))
             batch_size=cfg.buffer.batch_size)
         # 对TensorDictReplayBuffer进行懒初始化
@@ -144,7 +151,8 @@ def main(cfg: DictConfig):
         collector = aSyncDataCollector(
             partial(make_train_environment, cfg),
             exploration_policy,
-            init_random_frames=0,  # Currently not supported, but accounted for in script: cfg.collector.init_random_frames,
+            init_random_frames=0,
+            # Currently not supported, but accounted for in script: cfg.collector.init_random_frames,
             frames_per_batch=cfg.collector.frames_per_batch,
             total_frames=-1,
             device=collector_devices,
@@ -155,7 +163,7 @@ def main(cfg: DictConfig):
             extend_buffer=True,
             postproc=flatten,
             no_cuda_sync=True,  # 放弃CPU对GPU的计算同步等待
-            max_frames_per_traj=-1, # 不分割轨迹
+            max_frames_per_traj=-1,  # 不分割轨迹
         )
         collector.set_seed(cfg.seed)
         collector.start()
@@ -223,6 +231,7 @@ def main(cfg: DictConfig):
         init_random_frames = cfg.collector.init_random_frames  # 随机初始帧数
         update_freq = cfg.collector.update_freq  # 更新频率
         log_freq = cfg.logger.log_freq
+        eval_interval = cfg.logger['eval_interval']
 
         num_updates = 1000
         total_iter = 4000
@@ -236,16 +245,16 @@ def main(cfg: DictConfig):
         losses = []
         for i in range(total_iter * num_updates):
             timeit.printevery(num_prints=total_iter * num_updates // log_freq, total_count=total_iter * num_updates,
-                              erase=True) # num_prints打印总步数，total_count总步数
+                              erase=True)  # num_prints打印总步数，total_count总步数
             if (i % update_freq) == 0:
                 torchrl_logger.info("Updating weights")
-                collector.update_policy_weights_(params) # Update weights of the inference policy
+                collector.update_policy_weights_(params)  # Update weights of the inference policy
             pbar.update(1)
 
             # Optimization steps
             with timeit("train"):
                 with timeit("train - rb - sample"):
-                    sampled_tensordict = replay_buffer.sample() # Sample from replay buffer
+                    sampled_tensordict = replay_buffer.sample()  # Sample from replay buffer
 
                 with timeit("train - update"):
                     torch.compiler.cudagraph_mark_step_begin()
@@ -253,11 +262,11 @@ def main(cfg: DictConfig):
                 losses.append(loss_td.select("loss_actor", "loss_qvalue", "loss_alpha"))
 
             # Logging
+            # 异步log与同步log的区别是，异步collected_frames没有意义，同步可以用collected_frames作为数据标记因为每一次迭代的数据量相同，而异步应该用i作为迭代设置
             metrics_to_log = {}
             collected_frames = replay_buffer.write_count
 
-
-            if (i % log_freq) == 0: # 不用log_freq-1, 否则可能都收敛了才开始记录
+            if (i % log_freq) == 0:  # 不用log_freq-1, 否则可能都收敛了才开始记录
                 torchrl_logger.info("Training Logging")
                 torchrl_logger.info(f"Collected frames: {collected_frames}")  # 显示收集进度
                 if collected_frames >= init_random_frames:
@@ -270,20 +279,21 @@ def main(cfg: DictConfig):
                     metrics_to_log["train/entropy"] = loss_td["entropy"]
                     metrics_to_log["train/collected_frames"] = int(collected_frames)
 
+            # Evaluation - 提交异步评估任务
 
-            # Evaluation
-            eval_interval = cfg.logger['eval_interval']
             if collected_frames >= init_random_frames and (i % eval_interval) == 0:
-                with timeit("eval"):
-                    # eval_metrics = evaluate_policy(actor_critic=actor_critic, train_device=train_device,
-                    #                                cfg=cfg, logger=logger, step=i)
-                    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, train_device=train_device,
-                                                   cfg=cfg, logger=logger, step=i)
-                    metrics_to_log.update(eval_metrics)
-                    # Checkpoint保存（基于评估奖励）
-                    checkpoint_manager.save_if_best(model=actor_critic, reward=eval_metrics['eval/reward_mean'],
-                                                    step=i)
-                    torchrl_logger.info(f"Eval Logs: {metrics_to_log}") # 显示估计进度
+                # 保存模型（使用pending名称，评估完成后重命名）
+                model_filename = f"model_s{i:06d}_eval_pending.pt"
+                model_path = checkpoint_dir / model_filename
+                torch.save(actor_critic, model_path)
+
+                # 提交异步评估
+                async_evaluator.submit_eval(evaluate_policy_standalone, str(model_path), cfg, i)
+                torchrl_logger.info(f"提交评估任务: step {i}")
+
+            # 检查完成的评估结果（按顺序返回）
+            evaluate_results = async_evaluator.get_evaluate_results()
+            log_evaluate_results(evaluate_results, checkpoint_dir, logger)
 
             if logger is not None:
                 metrics_to_log.update(timeit.todict(prefix="time"))
@@ -291,11 +301,18 @@ def main(cfg: DictConfig):
                 log_metrics(logger, metrics_to_log, i)
 
         collector.shutdown()
+
+        # 关闭异步评估器并处理所有剩余结果
+        torchrl_logger.info("等待异步评估任务完成...")
+        remaining_results = async_evaluator.shutdown(wait=True)
+        if remaining_results:
+            torchrl_logger.info(f"处理剩余的 {len(remaining_results)} 个评估结果")
+            log_evaluate_results(remaining_results, checkpoint_dir, logger)
+
         end_time = time.time()
         execution_time = end_time - start_time
         torchrl_logger.info(f"训练完成，耗时: {execution_time:.2f}秒")
-
-
+        time.sleep(10)  # 确保wandb上传完成再退出
 
 ################################################################同步代码#####################################
 # 这些是同步的参数

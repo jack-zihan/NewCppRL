@@ -1,317 +1,135 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+"""SAC Example.
+
+This is a simple self-contained example of a SAC training script.
+
+It supports state environments like MuJoCo.
+
+The helper functions are coded in the utils.py associated with this script.
 """
-SAC同步训练脚本 (sync version)
-基于数据收集批次的同步训练模式
-"""
-import math
+from __future__ import annotations
+
+import warnings
+
 import os
 import sys
-import tempfile
 import time
-from pathlib import Path
-
+import math
+import tqdm
 import hydra
 import numpy as np
+import tempfile
+import warnings
+import tensordict
 import torch
 import torch.cuda
-import tqdm
-from omegaconf import DictConfig
-from tensordict import TensorDict
-from torchrl._utils import logger as torchrl_logger
-from torchrl.collectors import MultiaSyncDataCollector
-from torchrl.envs.utils import ExplorationType, set_exploration_type
-from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
-from torchrl.data import LazyMemmapStorage, TensorDictPrioritizedReplayBuffer
-from torchrl.record.loggers import get_logger
 import gymnasium as gym
 
-# 添加项目路径
-base_dir = Path(__file__).parent.parent.parent
-sys.path.append(str(base_dir))
+from pathlib import Path
+from functools import partial
+
+from omegaconf import DictConfig
+from tensordict import TensorDict
+from tensordict.nn import CudaGraphModule
+from torchrl._utils import compile_with_warmup, logger as torchrl_logger, timeit
+from torchrl.envs.utils import ExplorationType, set_exploration_type
+from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
+from torchrl.data import LazyMemmapStorage, LazyTensorStorage, TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
+from torchrl.collectors import SyncDataCollector
+from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
-from torchrl_utils_new.utils_env import make_sac_env
-from rl_new.sac_cont_sy.sac_utils import setup_devices, create_update_fn
-from torchrl_utils.local_video_recorder import LocalVideoRecorder
+from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatten, get_actor_actions,
+                                          generate_exp_name, evaluate_policy_parallel, CheckpointManager, log_metrics,
+                                          evaluate_policy, evaluate_policy_parallel, setup_torch_cache,
+                                          evaluate_policy_standalone, log_evaluate_results, is_time_to_evaluate)
+from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
+from rl_new.sac_cont_sy.async_evaluator import AsyncEvaluator
 
 torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能
+tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 
-algo_name = 'sac_cont_sy'
 
-# ============ 辅助函数 ============
-def flatten(td):
-    """将TensorDict展平为一维"""
-    return td.reshape(-1)
-
-def get_actor_actions(actor, obss, device):
-    """
-    从actor提取多个观测的动作（用于评估）。
-    
-    Args:
-        actor: SAC actor模型
-        obss: 观测列表
-        device: 计算设备
-    
-    Returns:
-        actions: numpy数组的动作列表
-    """
-    observations = []
-    vectors = []
-    
-    for obs in obss:
-        if isinstance(obs, dict):
-            observations.append(obs['observation'])
-            vectors.append(obs['vector'])  # 不需要额外包装成列表
-    
-    observations = torch.from_numpy(np.stack(observations, axis=0)).float().to(device)
-    vectors = torch.tensor(np.array(vectors)).float().to(device)
-    
-    # 确保vector是正确的shape
-    if vectors.ndim == 1:
-        vectors = vectors.unsqueeze(-1)
-    
-    # 创建TensorDict并获取确定性动作
-    td = TensorDict({"observation": observations, "vector": vectors}, batch_size=observations.shape[0])
-    with torch.no_grad():
-        td = actor(td)
-    
-    # 返回动作的numpy数组
-    actions = td["action"].cpu().numpy()
-    return actions
-
-def evaluate_policy(actor, env_id, env_kwargs, device, logger, step, cfg):
-    """
-    评估策略在多个episode上的表现，并录制视频。
-    
-    Args:
-        actor: SAC actor模型
-        env_id: 环境ID
-        env_kwargs: 环境参数
-        device: 计算设备
-        logger: 日志记录器
-        step: 当前训练步数
-        cfg: 配置对象
-    
-    Returns:
-        eval_metrics: 评估指标字典
-    """
-    # 创建评估环境（确保使用连续动作空间）
-    eval_envs = []
-    for _ in range(cfg.logger.eval_episodes):
-        # 创建连续动作空间的环境
-        env = gym.make(
-            env_id, 
-            render_mode=None,
-            action_type='continuous',  # 关键：使用连续动作空间
-            **env_kwargs
-        )
-        eval_envs.append(env)
-    
-    # 设置视频录制器（如果启用）
-    recorder = None
-    if cfg.logger.eval_video:
-        max_frames = min(4, cfg.logger.eval_episodes)  # 最多录制4个环境的视频
-        recorder = LocalVideoRecorder(
-            max_len=(cfg.logger.eval_max_steps * max_frames) // cfg.logger.eval_video_skip + 2,
-            skip=1,
-            use_memmap=True,
-            make_grid=True,
-            nrow=2,
-            fps=6,
-        )
-    
-    # 使用确定性策略进行评估
-    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-        # 初始化episode
-        obss = []
-        for env in eval_envs:
-            obs, _ = env.reset()
-            obss.append(obs)
-        
-        rewards = [0.0] * cfg.logger.eval_episodes
-        dones = [False] * cfg.logger.eval_episodes
-        completion_ratios = [0.0] * cfg.logger.eval_episodes  # 场地覆盖率（如果存在）
-        
-        # 录制初始帧
-        if recorder:
-            pixels = []
-            for idx in range(min(4, cfg.logger.eval_episodes)):
-                env = eval_envs[idx]
-                # 使用render()获取图像
-                pixel = env.render()
-                if pixel is not None:
-                    pixels.append(pixel)
-            if pixels:
-                recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
-        
-        # 评估循环
-        for t in range(cfg.logger.eval_max_steps):
-            # 获取动作
-            actions = get_actor_actions(actor, obss, device)
-            
-            # 执行环境步进
-            new_obss = []
-            act_idx = 0
-            for idx, env in enumerate(eval_envs):
-                if not dones[idx]:
-                    obs, reward, terminated, truncated, info = env.step(actions[act_idx])
-                    new_obss.append(obs)
-                    rewards[idx] += reward
-                    dones[idx] = terminated or truncated
-                    # 获取completion_ratio（如果存在）
-                    if isinstance(obs, dict) and 'completion_ratio' in obs:
-                        completion_ratios[idx] = obs['completion_ratio']
-                    act_idx += 1
-            
-            obss = new_obss
-            
-            # 录制视频帧
-            if recorder and (t + 1) % cfg.logger.eval_video_skip == 0:
-                pixels = []
-                for idx in range(min(4, cfg.logger.eval_episodes)):
-                    if not dones[idx]:
-                        pixel = eval_envs[idx].render()
-                        if pixel is not None:
-                            pixels.append(pixel)
-                if pixels:
-                    recorder.apply(torch.from_numpy(np.stack(pixels, 0)))
-            
-            # 检查是否所有episode都结束
-            if all(dones):
-                break
-    
-    # 计算评估指标
-    eval_metrics = {
-        "eval/reward": np.mean(rewards),
-        "eval/reward_std": np.std(rewards),
-        "eval/reward_min": np.min(rewards),
-        "eval/reward_max": np.max(rewards),
-        "eval/episodes": len(rewards),
-    }
-    
-    # 如果有completion_ratio，添加到指标中
-    if any(cr > 0 for cr in completion_ratios):
-        eval_metrics["eval/completion_ratio"] = np.mean(completion_ratios)
-    
-    # 记录指标和视频
-    if logger:
-        for key, value in eval_metrics.items():
-            logger.log_scalar(key, value, step=step)
-        
-        if recorder:
-            video_tensor = recorder.dump()
-            if video_tensor is not None:
-                logger.log_video('eval/video', video_tensor, step=step)
-    
-    # 清理环境
-    for env in eval_envs:
-        env.close()
-    
-    return eval_metrics
-
-# ============ 主训练函数 ============
-@hydra.main(version_base="1.1", config_path=".", config_name="config")
-def main(cfg: DictConfig):
+@hydra.main(version_base="1.1", config_path="", config_name="config-sync-server")
+def main(cfg: DictConfig):  # noqa: F821
     # 处理临时目录路径
     temp_dir = cfg.buffer.temp_dir
     if temp_dir and temp_dir.startswith('~'):
         temp_dir = os.path.expanduser(temp_dir)
-    
+
     with tempfile.TemporaryDirectory(dir=temp_dir) as tmpdir:
-        # ============ 创建实验目录和基础设置 ============
-        exp_name = cfg.ckpt_name
-        ckpt_path = base_dir / 'ckpt' / algo_name / exp_name / time.strftime('%Y-%m-%d_%H-%M-%S')
-        ckpt_path.mkdir(parents=True, exist_ok=True)
+        # ============ 1. 创建实验目录和基础设置 ============
+        exp_name = generate_exp_name(cfg.logger.model_name, cfg.logger.exp_name)
 
         # 设备配置
-        train_device, collector_devices = setup_devices(cfg)
-        torchrl_logger.info(f"训练设备: {train_device}")
-        torchrl_logger.info(f"收集设备: {collector_devices[:5]}... (共{len(collector_devices)}个)")
+        train_device, collector_devices = (torch.device("cuda:0"), torch.device("cuda:0")) if cfg.in_server else (
+            torch.device("cpu"), torch.device("cpu"))
+        torchrl_logger.info(f"训练设备: {train_device}, 收集设备: {collector_devices}")
 
         # 设置随机种子
-        torch.manual_seed(cfg.seed)
-        np.random.seed(cfg.seed)
+        torch.manual_seed(cfg.seed) and np.random.seed(cfg.seed)
 
-        # ============ 创建日志记录器 ============
+        # 确定编译模式
+        if cfg.compile.enable:
+            if cfg.in_server: setup_torch_cache()
+            compile_mode = (cfg.compile.mode or ("default" if cfg.compile.cudagraphs else "reduce-overhead"))
+        else:
+            compile_mode = None
+
+        # 设置checkpoint目录
+        checkpoint_dir = Path.cwd() / "checkpoints"
+        torchrl_logger.info(f"Checkpoint将保存到: {checkpoint_dir}")
+
+        # ============ 2. 创建日志记录器和异步评估器 ============
         logger = None
         if cfg.logger.backend:
             logger = get_logger(
-                logger_type=cfg.logger.backend,
-                logger_name=str(ckpt_path),
-                experiment_name=exp_name,
-                wandb_kwargs={
-                    "config": dict(cfg),
-                    "project": cfg.logger.project_name,
-                    "name": exp_name,
-                },
+                logger_type=cfg.logger.backend, experiment_name=exp_name, logger_name=exp_name,
+                # logger_name在wandb不显示，主要影响本地存储名字
+                wandb_kwargs={"mode": cfg.logger.mode, "config": dict(cfg),
+                              "project": cfg.logger.project_name, "group": cfg.logger.group_name, "name": exp_name},
             )
 
-        # ============ 创建模型 ============
+        # 初始化异步评估器
+        async_evaluator = AsyncEvaluator(max_workers=3)
+        torchrl_logger.info("初始化异步评估器 (max_workers=3)")
+
+        # ============ 3. 创建模型 ============
         # 使用配置中的环境ID创建模型
         if cfg.pretrained_model:
-            actor_critic = torch.load(base_dir / cfg.pretrained_model)
             torchrl_logger.info(f"加载预训练模型: {cfg.pretrained_model}")
+            actor_critic = torch.load(cfg.pretrained_path, map_location=train_device, weights_only=False)
         else:
-            # 创建一个样本环境用于模型创建
-            torchrl_logger.info(f"创建环境: {cfg.env.env_id}")
-            env_kwargs = dict(cfg.env.env_kwargs) if hasattr(cfg.env, 'env_kwargs') and cfg.env.env_kwargs else {}
-            proof_env = make_sac_env(
-                env_id=cfg.env.env_id, 
-                num_envs=1,
-                **env_kwargs
-            )
-            actor_critic = make_sac_models(env=proof_env)
-            proof_env.close()
-            
-        actor_critic = actor_critic.to(train_device)
-        actor = actor_critic[0]
-        q_critic = actor_critic[1]
+            torchrl_logger.info(f"使用dummy环境创建模型: {cfg.env.env_id}")
+            actor_critic = make_sac_models(env=make_train_environment(cfg, device="cpu"),
+                                           device=train_device)  # 在正确设备上创建模型（关键：传递device参数）
 
-        # ============ 创建回放缓冲区 ============
+        # ============ 4. 创建回放缓冲区和采集器 ============
+        # 同步缓冲区一版较大，需要memmap磁盘映射存储
         replay_buffer = TensorDictPrioritizedReplayBuffer(
-            alpha=0.7,
-            beta=0.5,
-            pin_memory=cfg.buffer.pin_memory,
-            prefetch=cfg.buffer.prefetch,
-            storage=LazyMemmapStorage(
-                max_size=cfg.buffer.buffer_size,
-                scratch_dir=tmpdir,
-            ),
-            batch_size=cfg.buffer.batch_size,
-        )
-        replay_buffer.append_transform(lambda td: td.to(train_device))
-        replay_buffer.empty()
+            alpha=0.7, beta=0.5, batch_size=cfg.buffer.batch_size,
+            pin_memory=cfg.buffer.pin_memory, prefetch=cfg.buffer.prefetch,
+            storage=LazyMemmapStorage(max_size=cfg.buffer.buffer_size, scratch_dir=temp_dir),
+        ).append_transform(lambda td: td.to(train_device))  # 采样后传输到训练设备
 
-        # ============ 创建收集器（同步模式，不传递replay_buffer） ============
-        env_kwargs = dict(cfg.env.env_kwargs) if hasattr(cfg.env, 'env_kwargs') and cfg.env.env_kwargs else {}
-        collector = MultiaSyncDataCollector(
-            create_env_fn=[lambda d=dev: make_sac_env(
-                env_id=cfg.env.env_id,
-                num_envs=cfg.collector.processes_per_gpu if 'cuda' in str(dev) else 1,
-                device=str(d),
-                **env_kwargs
-            ) for dev in collector_devices],
-            policy=actor,
-            policy_device='cpu',
-            frames_per_batch=cfg.collector.frames_per_batch,
-            total_frames=cfg.collector.total_frames,
-            device=collector_devices,
-            storing_device='cpu',
-            max_frames_per_traj=-1,
-            # 不传递 replay_buffer，使用同步收集模式
-            postproc=flatten,
+        # Create off-policy collector
+        collector = SyncDataCollector(
+            create_env_fn=partial(make_train_environment, cfg), policy=actor_critic[0],  # 提取 actor 用于探索
+            init_random_frames=cfg.collector.init_random_frames, total_frames=cfg.collector.total_frames,
+            frames_per_batch=cfg.collector.frames_per_batch, max_frames_per_traj=-1, device=train_device,
+            compile_policy={"mode": compile_mode} if compile_mode else False,
+            cudagraph_policy={"warmup": 10} if cfg.compile.cudagraphs else False,
         )
         collector.set_seed(cfg.seed)
-        torchrl_logger.info(f"创建{len(collector_devices)}个收集进程 (同步模式)")
+        torchrl_logger.info(f"创建{collector_devices}收集进程 (同步模式)")
 
-        # ============ 创建损失和优化器 ============
-        loss_module = SACLoss(
-            actor_network=actor,
-            qvalue_network=q_critic,
-            num_qvalue_nets=2,
-            loss_function=cfg.loss.loss_function,
-            delay_actor=False,
-            delay_qvalue=True,
-        )
+        # ============ 5. 创建损失和优化器 ============
+        loss_module = SACLoss(actor_network=actor_critic[0], qvalue_network=actor_critic[1],  # actor and qvalue
+                              num_qvalue_nets=2, loss_function=cfg.loss.loss_function, alpha_init=cfg.loss.alpha_init
+                              , delay_actor=False, delay_qvalue=True)
         loss_module.make_value_estimator(gamma=cfg.loss.gamma)
 
         # 目标网络更新器
@@ -322,20 +140,11 @@ def main(cfg: DictConfig):
         actor_params = list(loss_module.actor_network_params.flatten_keys().values())
 
         optimizer_actor = torch.optim.AdamW(
-            actor_params,
-            lr=cfg.optim.lr_actor,
-            weight_decay=cfg.optim.weight_decay_actor,
-        )
+            actor_params, lr=cfg.optim.lr_actor, weight_decay=cfg.optim.weight_decay_actor, eps=cfg.optim.eps_actor)
         optimizer_critic = torch.optim.AdamW(
-            critic_params,
-            lr=cfg.optim.lr_critic,
-            weight_decay=cfg.optim.weight_decay_critic,
-        )
+            critic_params, lr=cfg.optim.lr_critic, weight_decay=cfg.optim.weight_decay_critic, eps=cfg.optim.eps_critic)
         optimizer_alpha = torch.optim.AdamW(
-            [loss_module.log_alpha],
-            lr=cfg.optim.lr_alpha,
-            weight_decay=cfg.optim.weight_decay_alpha,
-        )
+            [loss_module.log_alpha], lr=cfg.optim.lr_alpha, weight_decay=cfg.optim.weight_decay_alpha)
 
         # 使用group_optimizers合并优化器
         optimizer = group_optimizers(optimizer_actor, optimizer_critic, optimizer_alpha)
@@ -348,159 +157,102 @@ def main(cfg: DictConfig):
             torchrl_logger.info("启用混合精度训练 (AMP)")
 
         # 创建优化函数
-        update_fn = create_update_fn(
-            loss_module, optimizer, target_net_updater, cfg, scaler
-        )
+        update_fn = create_update_fn(loss_module, optimizer, target_net_updater, cfg, compile_mode, scaler)
 
-        # ============ 主训练循环（同步模式） ============
-        start_time = time.time()
-        
-        # 核心参数
-        init_random_frames = cfg.collector.init_random_frames
-        batch_size = cfg.buffer.batch_size
-        frames_per_batch = cfg.collector.frames_per_batch
-        num_updates = math.ceil(frames_per_batch / batch_size * cfg.loss.utd_ratio)
-        test_interval = cfg.logger.test_interval
-        log_freq = cfg.logger.log_freq
-        
-        # 初始化统计
+        # ============ 7. 主训练循环（同步模式） ============
+
+        # Main loop
         collected_frames = 0
-        pbar = tqdm.tqdm(total=cfg.collector.total_frames, desc="收集数据")
-        
-        # 同步收集循环
-        for i, data in enumerate(collector):
-            log_info = {}
-            
-            # 处理收集到的数据
-            pbar.update(data.numel())
-            data = data.reshape(-1)  # 展平数据
-            current_frames = data.numel()
+        pbar = tqdm.tqdm(total=cfg.collector.total_frames)
+
+        init_random_frames = cfg.collector.init_random_frames
+        frames_per_batch = cfg.collector.frames_per_batch
+        num_updates = math.ceil(frames_per_batch / cfg.buffer.batch_size * cfg.optim.utd_ratio)
+
+        collector_iter, total_iter = iter(collector), len(collector)
+        start_time = time.time()
+
+        for step in range(total_iter):
+            timeit.printevery(num_prints=1000, total_count=total_iter, erase=True)
+
+            with timeit("collect"):
+                tensordict = next(collector_iter)
+
+            current_frames = tensordict.numel()
+            pbar.update(current_frames)
+
+            with timeit("rb - extend"):
+                # Add to replay buffer
+                tensordict = tensordict.reshape(-1)
+                replay_buffer.extend(tensordict)
+
             collected_frames += current_frames
-            
-            # 提取episode统计信息
-            if ("next", "done") in data.keys(include_nested=True):
-                done_mask = data["next", "done"]
-                if done_mask.any():
-                    # 收集episode奖励
-                    if ("next", "episode_reward") in data.keys(include_nested=True):
-                        episode_rewards = data["next", "episode_reward"][done_mask]
-                        if len(episode_rewards) > 0:
-                            log_info["train/episode_reward"] = episode_rewards.mean().item()
-                            log_info["train/episode_reward_max"] = episode_rewards.max().item()
-                            log_info["train/episode_reward_min"] = episode_rewards.min().item()
-                    
-                    # 收集episode长度
-                    if ("next", "step_count") in data.keys(include_nested=True):
-                        episode_lengths = data["next", "step_count"][done_mask]
-                        if len(episode_lengths) > 0:
-                            log_info["train/episode_length"] = episode_lengths.float().mean().item()
-                    
-                    # 收集weed_ratio（如果存在）
-                    if ("next", "completion_ratio") in data.keys(include_nested=True):
-                        episode_completion_ratios = data["next", "completion_ratio"][done_mask]
-                        if len(episode_completion_ratios) > 0:
-                            log_info["train/episode_completion_ratio"] = episode_completion_ratios.mean().item()
-                            # 删除额外信息，避免replay buffer存储
-                            data.pop('completion_ratio', None)
-                            data.pop(('next', 'completion_ratio'), None)
-            
-            # 手动添加到replay_buffer
-            replay_buffer.extend(data)
-            
-            # 如果还在收集初始随机帧，跳过训练
-            if collected_frames < init_random_frames:
-                if logger and log_info:
-                    for key, value in log_info.items():
-                        logger.log_scalar(key, value, step=collected_frames)
-                continue
-            
-            # ============ 训练更新 ============
-            losses = []
-            for j in range(num_updates):
-                # 从回放缓冲区采样
-                sampled_tensordict = replay_buffer.sample()
-                if sampled_tensordict.device != train_device:
-                    sampled_tensordict = sampled_tensordict.to(train_device, non_blocking=True)
-                
-                # 执行更新
-                loss_out = update_fn(sampled_tensordict)
-                losses.append(loss_out.select("loss_actor", "loss_qvalue", "loss_alpha"))
-                
-                # 更新优先级
-                td_error = (loss_out["loss_qvalue"] + loss_out["loss_actor"]).abs()
-                priority = td_error.expand(batch_size).detach()
-                replay_buffer.update_priority(sampled_tensordict["index"], priority)
-            
-            # ============ 日志记录 ============
-            if i % 10 == 0 and len(losses) > 0:  # 每10个批次记录一次
-                # 计算平均损失
-                losses_tensor = torch.stack(losses)
-                log_info.update({
-                    "train/q_loss": losses_tensor["loss_qvalue"].mean().item(),
-                    "train/a_loss": losses_tensor["loss_actor"].mean().item(),
-                    "train/alpha_loss": losses_tensor["loss_alpha"].mean().item(),
-                    "train/alpha": loss_out["alpha"],
-                    "train/entropy": loss_out["entropy"],
-                })
-                
-                # 记录收集信息
-                elapsed_time = time.time() - start_time
-                log_info.update({
-                    "train/collected_frames": collected_frames,
-                    "train/frames_per_sec": collected_frames / elapsed_time,
-                    "train/batches": i + 1,
-                })
-                
-                # 写入日志
-                if logger:
-                    for key, value in log_info.items():
-                        if isinstance(value, torch.Tensor):
-                            value = value.item()
-                        logger.log_scalar(key, value, step=collected_frames)
-            
-            # ============ 保存模型 ============
-            if collected_frames % test_interval == 0:
-                reward_str = f"{log_info.get('train/episode_reward', 0):.2f}" if 'train/episode_reward' in log_info else "0"
-                model_name = f"f[{collected_frames//1000:05d}]_r[{reward_str}].pt"
-                torch.save(
-                    actor_critic,
-                    ckpt_path / model_name
-                )
-                torchrl_logger.info(f"保存模型: {model_name}")
-            
-            # ============ 评估 ============
-            eval_interval = cfg.logger.eval_interval
-            if collected_frames % eval_interval == 0 and collected_frames > 0:
-                torchrl_logger.info(f"开始评估 (frames: {collected_frames})")
-                
-                # 执行评估
-                eval_metrics = evaluate_policy(
-                    actor=actor,
-                    env_id=cfg.env.env_id,
-                    env_kwargs=env_kwargs,
-                    device=train_device,
-                    logger=logger,
-                    step=collected_frames,
-                    cfg=cfg
-                )
-                
-                # 记录评估结果
-                torchrl_logger.info(
-                    f"评估完成 - 奖励: {eval_metrics['eval/reward']:.2f} ± {eval_metrics['eval/reward_std']:.2f} "
-                    f"[{eval_metrics['eval/reward_min']:.2f}, {eval_metrics['eval/reward_max']:.2f}]"
-                )
-            
-            # 检查是否达到总帧数
-            if collected_frames >= cfg.collector.total_frames:
-                break
-        
-        # 训练结束
+
+            # Optimization steps
+            with timeit("train"):
+                if collected_frames >= init_random_frames:
+                    losses = TensorDict(batch_size=[num_updates])
+                    for i in range(num_updates):
+                        with timeit("rb - sample"):
+                            sampled_tensordict = replay_buffer.sample()  # Sample from replay buffer
+
+                        with timeit("update"):
+                            torch.compiler.cudagraph_mark_step_begin()
+                            loss_td = update_fn(sampled_tensordict).clone()
+                        losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha")
+                        replay_buffer.update_tensordict_priority(sampled_tensordict)  # Update priority
+
+            episode_end = (tensordict["next", "done"] if tensordict["next", "done"].any()
+                           else tensordict["next", "truncated"])
+            episode_rewards = tensordict["next", "episode_reward"][episode_end]
+
+            # Logging
+            metrics_to_log = {}
+            if len(episode_rewards) > 0:
+                episode_length = tensordict["next", "step_count"][episode_end]
+                completion_ratio = tensordict["next", "completion_ratio"][episode_end]
+                metrics_to_log["train/reward"] = episode_rewards
+                metrics_to_log["train/episode_length"] = episode_length.sum() / len(episode_length)
+                metrics_to_log["completion_ratio"] = completion_ratio
+
+            if collected_frames >= init_random_frames:
+                losses = losses.mean()
+                metrics_to_log["train/q_loss"] = losses.get("loss_qvalue")
+                metrics_to_log["train/actor_loss"] = losses.get("loss_actor")
+                metrics_to_log["train/alpha_loss"] = losses.get("loss_alpha")
+                metrics_to_log["train/alpha"] = loss_td["alpha"]
+                metrics_to_log["train/entropy"] = loss_td["entropy"]
+
+            # Evaluation
+
+            if is_time_to_evaluate(current_frames, collected_frames, cfg):
+                model_path = checkpoint_dir / f"model_s{i:06d}_eval_pending.pt" # pending表示等待评估
+                torch.save(actor_critic, model_path)
+                # 提交异步评估
+                async_evaluator.submit_eval(evaluate_policy_standalone, str(model_path), cfg, i)
+                torchrl_logger.info(f"提交评估任务: step {i}")
+
+            evaluate_results = async_evaluator.get_evaluate_results()
+            log_evaluate_results(evaluate_results, checkpoint_dir, logger)
+
+
+            if logger is not None:
+                metrics_to_log.update(timeit.todict(prefix="time"))
+                metrics_to_log["time/speed"] = pbar.format_dict["rate"]
+                log_metrics(logger, metrics_to_log, collected_frames)
+
+            # Update weights of the inference policy
+            collector.update_policy_weights_()
+
         collector.shutdown()
-        end_time = time.time()
-        execution_time = end_time - start_time
-        torchrl_logger.info(f"训练完成，耗时: {execution_time:.2f}秒")
-        torchrl_logger.info(f"总帧数: {collected_frames}")
-        torchrl_logger.info(f"平均FPS: {collected_frames / execution_time:.2f}")
+        torchrl_logger.info("等待异步评估任务完成...")
+        remaining_results = async_evaluator.shutdown(wait=True)
+        if remaining_results:
+            torchrl_logger.info(f"处理剩余的 {len(remaining_results)} 个评估结果")
+            log_evaluate_results(remaining_results, checkpoint_dir, logger)
+        torchrl_logger.info(f"Training took {time.time() - start_time:.2f} seconds to finish")
+        time.sleep(10)  # 休眠10s使得日志上传完成
+
 
 if __name__ == "__main__":
     main()

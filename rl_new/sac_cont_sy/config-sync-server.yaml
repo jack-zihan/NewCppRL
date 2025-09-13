@@ -4,12 +4,11 @@
 # 基础配置
 pretrained_model: null
 seed: 42
-in_server: false
+in_server: True
 
 # ============ 环境配置 ============
 env:
   env_id: "NewPasture-v2"  # 可选: NewPasture-v1, v2, v3, v4, v5
-  seed: 42  # 环境随机种子
   # v1: 基础环境（含杂草）
   # v2: APF增强环境（默认）
   # v3: 多尺度特征环境
@@ -18,31 +17,16 @@ env:
   
   # 环境特定参数（可选）
   env_kwargs:
+    render_repeat_times: 1 # 确保渲染图片不放大是小图 400*400
     # v2环境默认使用APF，不需要额外配置
     # 如需自定义参数，请参考具体环境文档
 
 # ============ 数据收集配置 ============
 collector:
-  total_frames: 4_000_000
-  frames_per_batch: 20  # 同步模式使用较小批次
-  init_random_frames: 50_000  # 减少初始随机帧
-  update_freq: 10_000  # 每10000帧更新一次策略
-  env_per_collector: 4 # 16
-
-  # 多GPU/CPU收集配置（简洁直接）
-  # -1: 使用所有可用设备（自动排除训练GPU）
-  # null: 不使用该类型设备
-  # 列表: 指定设备ID
-  gpu_devices: [1]        # 默认不使用GPU收集（单GPU场景）
-  processes_per_gpu: 8     # 每个GPU运行2个进程（RTX 3090最优）
-  cpu_workers: null          # 使用8个CPU进程进行收集
-  num_envs: 16
-  # 备选配置示例：
-  # gpu_devices: -1        # 自动使用所有GPU（排除训练GPU）
-  # gpu_devices: null      # 不使用GPU收集
-  # cpu_workers: -1        # 使用所有CPU核心-2
-  # cpu_workers: null      # 不使用CPU收集  
-  # num_envs: 32          # gpu_devices和cpu_workers都为null时的默认环境数
+  total_frames: 4_000_000 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
+  frames_per_batch: 20 #20  # 同步模式使用较小批次
+  init_random_frames: 50_000 # 50_000  # 减少初始随机帧
+  env_per_collector: 64 #100 # 16
   
   # 性能优化
   pin_memory: true        # 锁定内存，加速GPU传输
@@ -56,11 +40,11 @@ training:
 # ============ 回放缓冲区 ============
 buffer:
   buffer_size: 500_000 # 100_000 # Small buffer size to keep only recent elements
-  batch_size: 1024 #1024  # 同步模式使用较小批次
+  batch_size: 2048 #1024  # 同步模式使用较小批次
   pin_memory: true        # 锁定内存优化
-  prefetch: 3            # 同步模式减少预取
+  prefetch: 10 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
   temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
-  shared_memory: true    # 使用共享内存提升性能
+  shared_memory: True #true    # 使用共享内存提升性能
 
 # ============ 优化器配置 ============
 optim:
@@ -94,30 +78,32 @@ loss:
 
 # ============ 编译优化（借鉴官方SAC） ============
 compile:
-  enable: false # true           # 启用torch.compile（5-10x加速）
+  enable: true # true           # 启用torch.compile（5-10x加速）
   mode: # reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
   warmup: 2             # compile_with_warmup的预热步数
-  cudagraph: true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+  cudagraphs: true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
 
 # ============ 日志配置 ============
 logger:
-  backend: null # wandb        # wandb, tensorboard, null
-  project_name: SAC
+  backend: wandb        # wandb, tensorboard, null
+  project_name: SAC_2025
   group_name: Weed
-  exp_name: Train
+  exp_name: Weed_v2_Recovery_new_config
   model_name: ContinuousSAC
 
   mode: online          # online, offline
-  test_interval: 25_000  # checkpoint保存间隔
-  test_ckpt_num: 5      # 保留最优的5个checkpoint
-  log_freq: 25_000      # 日志记录频率（帧数）
+  test_interval: 3000 #25_000  # 同步版暂时弃用，由于模型保存基于评估，使用eval_interval 同时作为checkpoint保存间隔
+  test_ckpt_num: 10      # 同步版暂时弃用，保留最优的5个checkpoint
+  log_freq: 1000 # 5000      # 同步版暂时弃用，日志记录频率（帧数）
 
   # 详细评估配置
-  eval_interval: 25_000   # 评估频率（帧数）
-  eval_episodes: 4        # 每次评估4个episode（更稳定的统计）
-  eval_max_steps: 10000   # 每个episode最大步数
-  eval_video: true        # 录制2x2网格视频
-  eval_video_skip: 100     # 视频跳帧（减小文件大小）
+  eval_interval: 50_000 # 25_000   # 评估频率（帧数）
+  eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
+  eval_max_steps: 5000 #10000   # 每个episode最大步数
+  eval_video: true       # 录制2x2网格视频
+  eval_video_skip: 50     # 视频跳帧（减小文件大小）
+  eval_device: cuda:0   # 评估使用的设备
+  show_progress: true
 
 # ============ 1.3版本hydra, 提高效率自定义输出地址 ============
 hydra:

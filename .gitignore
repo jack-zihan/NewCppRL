@@ -41,4 +41,4 @@ rules/.DS_Store
 /tests/
 
 # git laptop use
-/push_to_github_laptop.sh
+push_to_github_laptop.sh

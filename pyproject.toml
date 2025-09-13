@@ -32,5 +32,6 @@ dependencies = [
 #    "tensordict >= 0.5.0",
     "pandas",
     "scipy",
-    "cupy-cuda12x"
+    "cupy-cuda12x",
+    "av"
 ]
