@@ -24,9 +24,9 @@ env:
 # ============ 数据收集配置 ============
 collector:
   total_frames: 4_000_000 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
-  frames_per_batch: 20 #20  # 同步模式使用较小批次
+  frames_per_batch: 20 #32 #20 #20  # 同步模式使用较小批次
   init_random_frames: 50_000 # 50_000  # 减少初始随机帧
-  env_per_collector: 64 #100 # 16
+  env_per_collector: 32 #100 # 16
   
   # 性能优化
   pin_memory: true        # 锁定内存，加速GPU传输
@@ -88,7 +88,7 @@ logger:
   backend: wandb        # wandb, tensorboard, null
   project_name: SAC_2025
   group_name: Weed
-  exp_name: Weed_v2_Recovery_new_config
+  exp_name: Weed_v2_Recovery-Sync
   model_name: ContinuousSAC
 
   mode: online          # online, offline

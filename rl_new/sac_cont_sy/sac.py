@@ -20,12 +20,13 @@ import time
 import math
 import tqdm
 import hydra
-import numpy as np
+import shutil
 import tempfile
 import warnings
 import tensordict
 import torch
 import torch.cuda
+import numpy as np
 import gymnasium as gym
 
 from pathlib import Path
@@ -57,8 +58,10 @@ tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 def main(cfg: DictConfig):  # noqa: F821
     # 处理临时目录路径
     temp_dir = cfg.buffer.temp_dir
-    if temp_dir and temp_dir.startswith('~'):
-        temp_dir = os.path.expanduser(temp_dir)
+    if temp_dir:
+        if temp_dir.startswith('~'): temp_dir = os.path.expanduser(temp_dir) # ~转换为实际路径
+        if os.path.exists(temp_dir): shutil.rmtree(temp_dir); # 清空路径
+        os.makedirs(temp_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory(dir=temp_dir) as tmpdir:
         # ============ 1. 创建实验目录和基础设置 ============
@@ -70,7 +73,7 @@ def main(cfg: DictConfig):  # noqa: F821
         torchrl_logger.info(f"训练设备: {train_device}, 收集设备: {collector_devices}")
 
         # 设置随机种子
-        torch.manual_seed(cfg.seed) and np.random.seed(cfg.seed)
+        torch.manual_seed(cfg.seed); np.random.seed(cfg.seed)
 
         # 确定编译模式
         if cfg.compile.enable:
@@ -81,6 +84,7 @@ def main(cfg: DictConfig):  # noqa: F821
 
         # 设置checkpoint目录
         checkpoint_dir = Path.cwd() / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torchrl_logger.info(f"Checkpoint将保存到: {checkpoint_dir}")
 
         # ============ 2. 创建日志记录器和异步评估器 ============
@@ -95,7 +99,6 @@ def main(cfg: DictConfig):  # noqa: F821
 
         # 初始化异步评估器
         async_evaluator = AsyncEvaluator(max_workers=3)
-        torchrl_logger.info("初始化异步评估器 (max_workers=3)")
 
         # ============ 3. 创建模型 ============
         # 使用配置中的环境ID创建模型
@@ -112,7 +115,7 @@ def main(cfg: DictConfig):  # noqa: F821
         replay_buffer = TensorDictPrioritizedReplayBuffer(
             alpha=0.7, beta=0.5, batch_size=cfg.buffer.batch_size,
             pin_memory=cfg.buffer.pin_memory, prefetch=cfg.buffer.prefetch,
-            storage=LazyMemmapStorage(max_size=cfg.buffer.buffer_size, scratch_dir=temp_dir),
+            storage=LazyMemmapStorage(max_size=cfg.buffer.buffer_size, scratch_dir=tmpdir),
         ).append_transform(lambda td: td.to(train_device))  # 采样后传输到训练设备
 
         # Create off-policy collector
@@ -167,7 +170,7 @@ def main(cfg: DictConfig):  # noqa: F821
 
         init_random_frames = cfg.collector.init_random_frames
         frames_per_batch = cfg.collector.frames_per_batch
-        num_updates = math.ceil(frames_per_batch / cfg.buffer.batch_size * cfg.optim.utd_ratio)
+        num_updates = math.ceil(frames_per_batch / cfg.buffer.batch_size * cfg.loss.utd_ratio)
 
         collector_iter, total_iter = iter(collector), len(collector)
         start_time = time.time()
@@ -211,9 +214,9 @@ def main(cfg: DictConfig):  # noqa: F821
             if len(episode_rewards) > 0:
                 episode_length = tensordict["next", "step_count"][episode_end]
                 completion_ratio = tensordict["next", "completion_ratio"][episode_end]
-                metrics_to_log["train/reward"] = episode_rewards
+                metrics_to_log["train/reward"] = episode_rewards.mean().item()
                 metrics_to_log["train/episode_length"] = episode_length.sum() / len(episode_length)
-                metrics_to_log["completion_ratio"] = completion_ratio
+                metrics_to_log["train/completion_ratio"] = completion_ratio.mean().item()
 
             if collected_frames >= init_random_frames:
                 losses = losses.mean()
@@ -226,14 +229,16 @@ def main(cfg: DictConfig):  # noqa: F821
             # Evaluation
 
             if is_time_to_evaluate(current_frames, collected_frames, cfg):
-                model_path = checkpoint_dir / f"model_s{i:06d}_eval_pending.pt" # pending表示等待评估
+                model_path = checkpoint_dir / f"model_s{step:08d}_eval_pending.pt" # pending表示等待评估
                 torch.save(actor_critic, model_path)
                 # 提交异步评估
-                async_evaluator.submit_eval(evaluate_policy_standalone, str(model_path), cfg, i)
-                torchrl_logger.info(f"提交评估任务: step {i}")
+                async_evaluator.submit_eval(evaluate_policy_standalone, str(model_path), cfg, step)
+                torchrl_logger.info(f"提交评估任务: step {step}")
 
             evaluate_results = async_evaluator.get_evaluate_results()
-            log_evaluate_results(evaluate_results, checkpoint_dir, logger)
+            if evaluate_results:
+                torchrl_logger.info(f"上传评估指标: step {step}， {evaluate_results}")
+                log_evaluate_results(evaluate_results, checkpoint_dir, logger)
 
 
             if logger is not None:
