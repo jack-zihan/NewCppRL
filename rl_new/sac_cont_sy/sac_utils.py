@@ -129,7 +129,7 @@ def create_update_fn(loss_module, optimizer, target_net_updater, cfg, compile_mo
     def update(sampled_tensordict):
         optimizer.zero_grad(set_to_none=True)
 
-        if cfg.training.use_amp and scaler is not None: # 混合精度训练 - 使用autocast
+        if cfg.training.use_amp and scaler is not None:  # 混合精度训练 - 使用autocast
             # 计算损失
             with torch.autocast(device_type='cuda', dtype=torch.float16):
                 loss_out = loss_module(sampled_tensordict)
@@ -146,13 +146,13 @@ def create_update_fn(loss_module, optimizer, target_net_updater, cfg, compile_mo
 
             scaler.step(optimizer)
             scaler.update()
-        else: # 标准训练
+        else:  # 标准训练
             # 计算损失
             loss_out = loss_module(sampled_tensordict)
             actor_loss, q_loss, alpha_loss = loss_out["loss_actor"], loss_out["loss_qvalue"], loss_out["loss_alpha"]
-            (actor_loss + q_loss + alpha_loss).sum().backward() # 反向传播
+            (actor_loss + q_loss + alpha_loss).sum().backward()  # 反向传播
 
-            if cfg.optim.max_grad_norm: # 梯度裁剪
+            if cfg.optim.max_grad_norm:  # 梯度裁剪
                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
 
             optimizer.step()
@@ -252,22 +252,15 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1)
     # 2. 执行rollout - 使用break_when_all_done确保所有环境完成
     with set_exploration_type(ExplorationType.DETERMINISTIC):
         # 创建进度条（使用传入的position，评估完成后自动清除）
-        pbar = tqdm(
-            total=cfg.logger.eval_max_steps, 
-            desc=f"Eval step={step}", 
-            position=position,           # 使用传入的position
-            leave=False,                 # 评估完成后自动清除
-            dynamic_ncols=True,         # 适应终端宽度
-            disable=not cfg.logger.show_progress
-        )
+        pbar = tqdm(total=cfg.logger.eval_max_steps, desc=f"Eval step={step}", disable=not cfg.logger.show_progress,
+                    position=position,leave=False, dynamic_ncols=True) # 使用传入的position, 评估完成后自动清除, 适应终端宽度
 
         eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
                                         auto_cast_to_device=True, break_when_all_done=True,  # 确保所有环境完成完整episode
                                         callback=lambda env, td: (pbar.update(1),
                                                                   pbar.set_postfix(done=int(td["done"].sum()),
-                                                                                   step=step, reward=td[
-                                                                          "episode_reward"].mean(), completion_ratio=td[
-                                                                          "completion_ratio"].mean())))
+                                                                  step=step, reward=td["episode_reward"].mean(),
+                                                                  completion_ratio=td["completion_ratio"].mean())))
         # pbar.close()
     # 3. 视频上传（如果配置了）
     if cfg.logger.eval_video: eval_env.apply(partial(dump_video, step=step))
@@ -563,6 +556,10 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 
     from torchrl.record.loggers import CSVLogger
     import shutil
 
+    # 从模型路径推断工作目录
+    model_path = Path(model_path)
+    working_dir = model_path.parent.parent  # checkpoints -> 工作目录
+    
     # 根据配置选择评估设备
     device = torch.device(cfg.logger['eval_device'])
 
@@ -572,21 +569,22 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 
     # 创建CSVLogger - 使用MP4格式
     csv_logger = CSVLogger(
         exp_name=f"eval_{step}",
-        log_dir=str(Path.cwd() / "eval_videos_temp"),  # 临时目录
+        log_dir=str(working_dir / "eval_videos_temp"),  # 使用推断的工作目录
         video_format="mp4",  # MP4格式便于直接查看
         video_fps=cfg.logger.get('eval_video_fps', 6)
     )
 
     # 执行评估
-    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, cfg=cfg, logger=csv_logger, step=step, position=position)
+    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, cfg=cfg, logger=csv_logger, step=step,
+                                            position=position)
 
     # 提取关键指标（completion_ratio 可能不存在，做降级）
     reward_mean = float(eval_metrics['eval/reward_mean'])
     completion_rate = float(eval_metrics['eval/completion_ratio'])
 
     # 查找 CSVLogger 生成的视频文件并移动到最终目录（严格模式：仅接受 eval_video_{step}.mp4）
-    tmp_dir = Path.cwd() / "eval_videos_temp" / f"eval_{step}" / "videos"
-    final_dir = Path.cwd() / "eval_videos"
+    tmp_dir = working_dir / "eval_videos_temp" / f"eval_{step}" / "videos"
+    final_dir = working_dir / "eval_videos"
     final_dir.mkdir(exist_ok=True)
 
     temp_video_path = tmp_dir / "eval" / f"video_{step}.mp4"
@@ -601,7 +599,7 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 
         shutil.move(str(temp_video_path), str(final_video_path))
         # 清理临时目录（容错）
         try:
-            tmp_root = Path.cwd() / "eval_videos_temp" / f"eval_{step}"
+            tmp_root = working_dir / "eval_videos_temp" / f"eval_{step}"
             if tmp_root.exists():
                 shutil.rmtree(tmp_root)
         except Exception:
@@ -618,6 +616,7 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 
         'reward_mean': reward_mean,
         'completion_rate': completion_rate
     }
+
 
 def is_time_to_evaluate(current_frames, collected_frames, cfg):
     prev_frames = collected_frames - current_frames

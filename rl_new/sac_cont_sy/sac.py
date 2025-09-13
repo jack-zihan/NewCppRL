@@ -239,15 +239,15 @@ def main(cfg: DictConfig):  # noqa: F821
             # Evaluation
 
             if is_time_to_evaluate(current_frames, collected_frames, cfg):
-                model_path = checkpoint_dir / f"model_s{step:08d}_eval_pending.pt" # pending表示等待评估
+                model_path = checkpoint_dir / f"model_s{collected_frames:08d}_eval_pending.pt" # pending表示等待评估
                 torch.save(actor_critic, model_path)
                 # 提交异步评估
-                async_evaluator.submit_eval(evaluate_policy_standalone, str(model_path), cfg, step)
-                torchrl_logger.info(f"提交评估任务: step {step}")
+                async_evaluator.submit_eval(evaluate_policy_standalone, str(model_path.absolute()), cfg, collected_frames)
+                torchrl_logger.info(f"提交评估任务: collected_frames {collected_frames}")
 
             evaluate_results = async_evaluator.get_evaluate_results()
             if evaluate_results:
-                torchrl_logger.info(f"上传评估指标: step {step}， {evaluate_results}")
+                torchrl_logger.info(f"上传评估指标: collected_frames {collected_frames}， {evaluate_results}")
                 log_evaluate_results(evaluate_results, checkpoint_dir, logger)
 
 
