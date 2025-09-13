@@ -94,6 +94,7 @@ def main(cfg: DictConfig):
         # 初始化checkpoint管理器 - 使用Hydra管理的工作目录，相对于Hydra输出目录
         checkpoint_dir = Path.cwd() / "checkpoints"
         checkpoint_manager = CheckpointManager(save_dir=checkpoint_dir, max_checkpoints=cfg.logger.test_ckpt_num)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         torchrl_logger.info(f"Checkpoint将保存到: {checkpoint_dir}")
 
         # 初始化异步评估器

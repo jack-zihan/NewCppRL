@@ -251,15 +251,15 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step):
     # 2. 执行rollout - 使用break_when_all_done确保所有环境完成
     with set_exploration_type(ExplorationType.DETERMINISTIC):
         # 创建进度条（disable参数让它在关闭时变成no-op，无需if判断）
-        pbar = tqdm(total=cfg.logger.eval_max_steps, desc="Evaluating", disable=not cfg.logger.show_progress)
+        # pbar = tqdm(total=cfg.logger.eval_max_steps, desc="Evaluating", disable=not cfg.logger.show_progress)
 
         eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
-                                        auto_cast_to_device=True, break_when_all_done=True,  # 确保所有环境完成完整episode
-                                        callback=lambda env, td: (pbar.update(1),
-                                                                  pbar.set_postfix(done=int(td["done"].sum()),
-                                                                                   step=step, reward=td[
-                                                                          "episode_reward"].mean(), )))
-        pbar.close()
+                                        auto_cast_to_device=True, break_when_all_done=True,)  # 确保所有环境完成完整episode
+                                        # callback=lambda env, td: (pbar.update(1),
+                                        #                           pbar.set_postfix(done=int(td["done"].sum()),
+                                        #                                            step=step, reward=td[
+                                        #                                   "episode_reward"].mean(), )))
+        # pbar.close()
     # 3. 视频上传（如果配置了）
     if cfg.logger.eval_video: eval_env.apply(partial(dump_video, step=step))
 
