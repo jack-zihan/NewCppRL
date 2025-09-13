@@ -39,3 +39,6 @@ rules/.DS_Store
 /rl_new/sac_cont_sy/outputs/
 /wandb/
 /tests/
+
+# git laptop use
+/push_to_github_laptop.sh
