@@ -25,8 +25,8 @@ env:
 collector:
   total_frames: 4_000_000 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
   frames_per_batch: 20 #32 #20 #20  # 同步模式使用较小批次
-  init_random_frames: 50_000 # 50_000  # 减少初始随机帧
-  env_per_collector: 32 #100 # 16
+  init_random_frames: 200 #50_000 # 50_000  # 减少初始随机帧
+  env_per_collector: 4 #32 #100 # 16
   
   # 性能优化
   pin_memory: true        # 锁定内存，加速GPU传输
@@ -39,10 +39,10 @@ training:
 
 # ============ 回放缓冲区 ============
 buffer:
-  buffer_size: 500_000 # 100_000 # Small buffer size to keep only recent elements
+  buffer_size: 100_000 #500_000 # 100_000 # Small buffer size to keep only recent elements
   batch_size: 2048 #1024  # 同步模式使用较小批次
   pin_memory: true        # 锁定内存优化
-  prefetch: 10 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
+  prefetch: 2 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
   temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
   shared_memory: True #true    # 使用共享内存提升性能
 
@@ -78,17 +78,17 @@ loss:
 
 # ============ 编译优化（借鉴官方SAC） ============
 compile:
-  enable: true # true           # 启用torch.compile（5-10x加速）
+  enable: false # true           # 启用torch.compile（5-10x加速）
   mode: # reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
   warmup: 2             # compile_with_warmup的预热步数
-  cudagraphs: true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+  cudagraphs: false # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
 
 # ============ 日志配置 ============
 logger:
   backend: wandb        # wandb, tensorboard, null
   project_name: SAC_2025
   group_name: Weed
-  exp_name: Weed_v2_Recovery-Sync
+  exp_name: Weed_v2_Local_Recovery-Sync
   model_name: ContinuousSAC
 
   mode: online          # online, offline
@@ -97,12 +97,12 @@ logger:
   log_freq: 1000 # 5000      # 同步版暂时弃用，日志记录频率（帧数）
 
   # 详细评估配置
-  eval_worker: 3
-  eval_interval: 50_000 # 25_000   # 评估频率（帧数）
+  eval_worker: 1
+  eval_interval: 500 #50_000 # 25_000   # 评估频率（帧数）
   eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
-  eval_max_steps: 5000 #10000   # 每个episode最大步数
+  eval_max_steps: 100 #10000   # 每个episode最大步数
   eval_video: true       # 录制2x2网格视频
-  eval_video_skip: 25     # 视频跳帧（减小文件大小）
+  eval_video_skip: 2     # 视频跳帧（减小文件大小）
   eval_device: cuda:0   # 评估使用的设备
   show_progress: true
 

@@ -101,6 +101,7 @@ compile:
 
 # ============ 日志配置 ============
 logger:
+  eval_worker: 1
   backend: null # wandb        # wandb, tensorboard, null
   project_name: SAC
   group_name: Weed

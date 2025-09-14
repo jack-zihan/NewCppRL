@@ -174,7 +174,7 @@ def make_drop_pixels_eval_environment(cfg, logger=None, eval_device="cpu"):
     eval_parallel = ParallelEnv(cfg.logger.eval_episodes, EnvCreator(partial_eval), serial_for_single=True)
 
     # 2) 组装 Transform 链
-    trsf = Compose(InitTracker(), StepCounter(), DoubleToFloat(), RewardSum())
+    trsf = Compose(InitTracker(), StepCounter(max_steps=cfg.logger.eval_max_steps), DoubleToFloat(), RewardSum())
 
     if cfg.logger.eval_video and logger is not None: # KeepLastPixels -> VideoRecorder -> DropPixels
         trsf.insert(0, KeepLastPixels())

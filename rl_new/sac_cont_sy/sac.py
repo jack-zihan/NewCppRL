@@ -55,7 +55,7 @@ torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能
 tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 
 
-@hydra.main(version_base="1.1", config_path="", config_name="config-sync-server")
+@hydra.main(version_base="1.1", config_path="", config_name="config-sync")
 def main(cfg: DictConfig):  # noqa: F821
     # 处理临时目录路径
     temp_dir = cfg.buffer.temp_dir
@@ -100,9 +100,15 @@ def main(cfg: DictConfig):  # noqa: F821
                 wandb_kwargs={"mode": cfg.logger.mode, "config": dict(cfg),
                               "project": cfg.logger.project_name, "group": cfg.logger.group_name, "name": exp_name},
             )
+        
+        # 定义评估指标使用独立的x轴，避免异步评估的step冲突
+        if logger is not None:
+            logger.experiment.define_metric("eval_step")
+            logger.experiment.define_metric("eval/*", step_metric="eval_step")
+            torchrl_logger.info("已配置WandB评估指标使用独立的eval_step轴")
 
         # 初始化异步评估器
-        async_evaluator = AsyncEvaluator(max_workers=3)
+        async_evaluator = AsyncEvaluator(max_workers=cfg.logger.eval_worker)
 
         # ============ 3. 创建模型 ============
         # 使用配置中的环境ID创建模型
@@ -170,13 +176,7 @@ def main(cfg: DictConfig):  # noqa: F821
 
         # Main loop
         collected_frames = 0
-        pbar = tqdm.tqdm(
-            total=cfg.collector.total_frames,
-            desc="Training",
-            position=0,          # 固定在顶部
-            leave=True,          # 训练结束后保留
-            dynamic_ncols=True   # 适应终端宽度
-        )
+        pbar = tqdm.tqdm(total=cfg.collector.total_frames, desc="Training", position=0,leave=True, dynamic_ncols=True) # 固定在顶部 训练结束后保留 适应终端宽度
 
         init_random_frames = cfg.collector.init_random_frames
         frames_per_batch = cfg.collector.frames_per_batch
@@ -247,7 +247,6 @@ def main(cfg: DictConfig):  # noqa: F821
 
             evaluate_results = async_evaluator.get_evaluate_results()
             if evaluate_results:
-                torchrl_logger.info(f"上传评估指标: collected_frames {collected_frames}， {evaluate_results}")
                 log_evaluate_results(evaluate_results, checkpoint_dir, logger)
 
 
@@ -259,14 +258,22 @@ def main(cfg: DictConfig):  # noqa: F821
             # Update weights of the inference policy
             collector.update_policy_weights_()
 
+        torchrl_logger.info(f"Training took {time.time() - start_time:.2f} seconds to finish")
+
         collector.shutdown()
         torchrl_logger.info("等待异步评估任务完成...")
         remaining_results = async_evaluator.shutdown(wait=True)
         if remaining_results:
             torchrl_logger.info(f"处理剩余的 {len(remaining_results)} 个评估结果")
             log_evaluate_results(remaining_results, checkpoint_dir, logger)
-        torchrl_logger.info(f"Training took {time.time() - start_time:.2f} seconds to finish")
-        time.sleep(10)  # 休眠10s使得日志上传完成
+
+        
+        # 确保WandB数据完整保存
+        if logger is not None:
+           logger.experiment.finish()
+           torchrl_logger.info("WandB运行已完成")
+        
+        time.sleep(3)  # 休眠3s使得日志上传完成
 
 
 if __name__ == "__main__":

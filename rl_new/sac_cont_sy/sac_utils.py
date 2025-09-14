@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 import numpy as np
 from datetime import datetime
@@ -7,6 +8,8 @@ import gymnasium as gym
 import sys
 import torch
 import warnings
+import wandb
+
 from torchrl._utils import compile_with_warmup, logger as torchrl_logger
 from tensordict.nn import CudaGraphModule
 from tensordict import TensorDict
@@ -19,6 +22,11 @@ from rl_new.sac_cont_sy.env_utils import make_environment, make_single_environme
 from functools import partial
 from torchrl.record import VideoRecorder
 
+import torch
+from pathlib import Path
+from torchrl.record.loggers import CSVLogger
+import shutil
+
 
 def dump_video(module, step):
     """Helper function to dump video from VideoRecorder."""
@@ -30,7 +38,6 @@ def dump_video(module, step):
 def log_metrics(logger, metrics, step):
     for metric_name, metric_value in metrics.items():
         logger.log_scalar(metric_name, metric_value, step)
-
 
 def setup_torch_cache():
     # 设置缓存目录（确保有写权限）
@@ -251,29 +258,32 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1)
 
     # 2. 执行rollout - 使用break_when_all_done确保所有环境完成
     with set_exploration_type(ExplorationType.DETERMINISTIC):
-        # 创建进度条（使用传入的position，评估完成后自动清除）
-        pbar = tqdm(total=cfg.logger.eval_max_steps, desc=f"Eval step={step}", disable=not cfg.logger.show_progress,
-                    position=position,leave=False, dynamic_ncols=True) # 使用传入的position, 评估完成后自动清除, 适应终端宽度
+        # 创建进度条（使用传入的position，评估完成后自动清除,+2使得StepCounter有效）
+        pbar = tqdm(total=cfg.logger.eval_max_steps+2, desc=f"Eval step={step}", disable=not cfg.logger.show_progress,
+                    position=position, leave=False, dynamic_ncols=True)  # 使用传入的position, 评估完成后自动清除, 适应终端宽度
 
-        eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps, policy=actor_critic[0],  # 使用actor
+        eval_rollout = eval_env.rollout(max_steps=cfg.logger.eval_max_steps+2, policy=actor_critic[0],  # 使用actor
                                         auto_cast_to_device=True, break_when_all_done=True,  # 确保所有环境完成完整episode
                                         callback=lambda env, td: (pbar.update(1),
                                                                   pbar.set_postfix(done=int(td["done"].sum()),
-                                                                  step=step, reward=td["episode_reward"].mean(),
-                                                                  completion_ratio=td["completion_ratio"].mean())))
+                                                                                   step=step,
+                                                                                   reward=td["episode_reward"].mean(),
+                                                                                   completion_ratio=td[
+                                                                                       "completion_ratio"].mean())))
         # pbar.close()
     # 3. 视频上传（如果配置了）
     if cfg.logger.eval_video: eval_env.apply(partial(dump_video, step=step))
 
     # 4. 从"next"字典的最后一帧提取所有数据
-    episode_rewards = eval_rollout["next", "episode_reward"][
-        eval_rollout["next", "done"]].cpu().numpy()  # RewardSum和StepCounter的输出在"next"中
-    episode_lengths = eval_rollout["next", "step_count"][eval_rollout["next", "done"]].cpu().numpy()
+    episode_end = (eval_rollout["next", "done"] if eval_rollout["next", "done"].any()
+                   else eval_rollout["next", "truncated"])
+    episode_rewards = eval_rollout["next", "episode_reward"][episode_end].cpu().numpy()  # RewardSum和StepCounter的输出在"next"中
+    episode_lengths = eval_rollout["next", "step_count"][episode_end].cpu().numpy()
 
     # 5. completion_ratio也在"next"的observation中
     completion_ratios = None
     if "completion_ratio" in eval_rollout["next"].keys():  # 使用[-1]是安全的，因为rollout保存的是done时的数据（reset发生在保存之后）
-        completion_ratios = eval_rollout["next", "completion_ratio"][eval_rollout["next", "done"]].cpu().numpy()
+        completion_ratios = eval_rollout["next", "completion_ratio"][episode_end].cpu().numpy()
 
     # 6. 关闭环境
     eval_env.close()
@@ -290,6 +300,91 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1)
     torchrl_logger.info(f"并行评估完成 - 平均奖励: {eval_metrics['eval/reward_mean']:.2f}")
     return eval_metrics
 
+def log_evaluate_results(results, checkpoint_dir, logger=None):
+    """
+    处理评估结果列表，包括日志记录、视频上传和模型重命名
+    
+    Args:
+        results: 评估结果列表
+        checkpoint_dir: checkpoint保存目录
+        logger: 日志记录器（可选）
+    """
+    for result in results:
+        # 记录metrics到wandb
+        torchrl_logger.info(f"上传评估指标: collected_frames_step {result['step']}， {result['metrics']}")
+
+        if logger is not None:
+            log_data = {**result['metrics'], 'eval_step': result['step']} # 构建所有数据的字典
+            if Path(result['video_path']).exists(): # 如果有视频，添加到同一个log中
+                log_data['eval/video'] = wandb.Video(result['video_path'], fps=1, format="mp4")
+            logger.experiment.log(log_data)
+        else:
+            torchrl_logger.info(f"视频上传失败，Path(result['video_path']).exists() and logger is not None判断不满足")
+
+        # 重命名模型文件（加入评估结果）
+        old_model_path = checkpoint_dir / f"model_s{result['step']:08d}_eval_pending.pt"
+        new_model_filename = f"model_step{result['step']:08d}_reward{result['reward_mean']:.3f}_completion{result['completion_rate']:.3f}.pt"
+
+        if old_model_path.exists():
+            old_model_path.rename(checkpoint_dir / new_model_filename)
+            torchrl_logger.info(f"模型已保存: {new_model_filename}")
+        time.sleep(3)  # 确保文件系统稳定
+
+
+def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 1):
+    """
+    独立评估函数 - 在子进程中运行，使用CSVLogger保存视频到本地
+    
+    Args:
+        model_path: 模型文件路径
+        cfg: 完整配置
+        step: 当前训练步数
+        position: 进度条显示位置
+        
+    Returns:
+        dict: 包含metrics、视频路径和关键指标的字典
+    """
+    # 从模型路径推断工作目录
+    model_path = Path(model_path)
+    working_dir = model_path.parent.parent  # checkpoints -> 工作目录
+
+    # 加载模型到评估设备（weights_only=False以兼容TorchRL模型）
+    actor_critic = torch.load(model_path, map_location=torch.device(cfg.logger['eval_device']), weights_only=False)
+
+    # 创建CSVLogger - 使用MP4格式
+    csv_logger = CSVLogger(exp_name=f"eval_{step}", log_dir=str(working_dir / "eval_videos_temp"),  # 使用推断的工作目录
+                           video_format="mp4", video_fps=1)
+
+    # 执行评估
+    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, cfg=cfg, logger=csv_logger, step=step,
+                                            position=position)
+    # 提取关键指标
+    reward_mean, completion_rate = float(eval_metrics['eval/reward_mean']), float(eval_metrics['eval/completion_ratio'])
+
+    # 生成最终文件名并移动
+    video_dir = working_dir / "eval_videos";
+    video_dir.mkdir(exist_ok=True)
+    video_path = video_dir / f"video_s{step:08d}_reward{reward_mean:.3f}_completion_rate{completion_rate:.3f}.mp4"
+    temp_video_path = working_dir / "eval_videos_temp" / f"eval_{step}" / "videos" / "eval" / f"video_{step}.mp4"
+    shutil.move(str(temp_video_path), str(video_path))
+
+    # 清理临时目录
+    tmp_root = working_dir / "eval_videos_temp" / f"eval_{step}"
+    if tmp_root.exists():
+        shutil.rmtree(tmp_root)
+
+    torchrl_logger.info(f"评估视频已保存: {video_path}")
+
+    return {'metrics': eval_metrics, 'reward_mean': reward_mean, 'completion_rate': completion_rate, 'step': step,
+            'video_path': str(video_path) if video_path else None}
+
+
+def is_time_to_evaluate(current_frames, collected_frames, cfg):
+    prev_frames = collected_frames - current_frames
+    crossed = (prev_frames // cfg.logger.eval_interval) < (collected_frames // cfg.logger.eval_interval)
+    final = collected_frames >= cfg.collector.total_frames
+
+    return True if ((crossed and collected_frames >= cfg.collector.init_random_frames) or final) else False
 
 # ============ Checkpoint管理 ============
 import os
@@ -297,8 +392,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import torch
 from torchrl._utils import logger as torchrl_logger
-
-
 class CheckpointManager:
     """
     管理Top-N checkpoint保存，基于评估奖励
@@ -313,12 +406,12 @@ class CheckpointManager:
     def save_if_best(self, model, reward: float, step: int) -> bool:
         """
         仅保存Top-N个最佳模型
-        
+
         Args:
             model: 要保存的模型
             reward: 评估奖励
             step: 当前训练步数
-            
+
         Returns:
             bool: 是否保存了模型
         """
@@ -508,119 +601,3 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
 
     torchrl_logger.info(f"评估完成 - 平均奖励: {eval_metrics['eval/reward_mean']:.2f}")
     return eval_metrics
-
-
-def log_evaluate_results(results, checkpoint_dir, logger=None):
-    """
-    处理评估结果列表，包括日志记录、视频上传和模型重命名
-    
-    Args:
-        results: 评估结果列表
-        checkpoint_dir: checkpoint保存目录
-        logger: 日志记录器（可选）
-    """
-    for result in results:
-        # 记录metrics到wandb
-        if logger is not None:
-            log_metrics(logger, result['metrics'], result['step'])
-
-        # 上传视频到wandb（保持本地文件）
-        if result['video_path'] and Path(result['video_path']).exists() and logger is not None:
-            logger.log_video('eval/video', result['video_path'], step=result['step'])
-
-        # 重命名模型文件（加入评估结果）
-        old_model_path = checkpoint_dir / f"model_s{result['step']:06d}_eval_pending.pt"
-        new_model_filename = f"model_s{result['step']:06d}_r{result['reward_mean']:.2f}_c{result['completion_rate']:.1f}.pt"
-        new_model_path = checkpoint_dir / new_model_filename
-
-        if old_model_path.exists():
-            old_model_path.rename(new_model_path)
-            torchrl_logger.info(f"模型已保存: {new_model_filename}")
-
-
-def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 1):
-    """
-    独立评估函数 - 在子进程中运行，使用CSVLogger保存视频到本地
-    
-    Args:
-        model_path: 模型文件路径
-        cfg: 完整配置
-        step: 当前训练步数
-        position: 进度条显示位置
-        
-    Returns:
-        dict: 包含metrics、视频路径和关键指标的字典
-    """
-    import torch
-    from pathlib import Path
-    from torchrl.record.loggers import CSVLogger
-    import shutil
-
-    # 从模型路径推断工作目录
-    model_path = Path(model_path)
-    working_dir = model_path.parent.parent  # checkpoints -> 工作目录
-    
-    # 根据配置选择评估设备
-    device = torch.device(cfg.logger['eval_device'])
-
-    # 加载模型到评估设备（weights_only=False以兼容TorchRL模型）
-    actor_critic = torch.load(model_path, map_location=device, weights_only=False)
-
-    # 创建CSVLogger - 使用MP4格式
-    csv_logger = CSVLogger(
-        exp_name=f"eval_{step}",
-        log_dir=str(working_dir / "eval_videos_temp"),  # 使用推断的工作目录
-        video_format="mp4",  # MP4格式便于直接查看
-        video_fps=cfg.logger.get('eval_video_fps', 6)
-    )
-
-    # 执行评估
-    eval_metrics = evaluate_policy_parallel(actor_critic=actor_critic, cfg=cfg, logger=csv_logger, step=step,
-                                            position=position)
-
-    # 提取关键指标（completion_ratio 可能不存在，做降级）
-    reward_mean = float(eval_metrics['eval/reward_mean'])
-    completion_rate = float(eval_metrics['eval/completion_ratio'])
-
-    # 查找 CSVLogger 生成的视频文件并移动到最终目录（严格模式：仅接受 eval_video_{step}.mp4）
-    tmp_dir = working_dir / "eval_videos_temp" / f"eval_{step}" / "videos"
-    final_dir = working_dir / "eval_videos"
-    final_dir.mkdir(exist_ok=True)
-
-    temp_video_path = tmp_dir / "eval" / f"video_{step}.mp4"
-    if not temp_video_path.exists():
-        # 严格模式：不做回退，直接报错，便于及时发现评估录制路径问题
-        raise FileNotFoundError(f"未找到严格匹配的视频文件: {temp_video_path}")
-
-    # 生成最终文件名并移动
-    video_filename = f"video_s{step:06d}_r{reward_mean:.2f}_c{completion_rate:.1f}.mp4"
-    final_video_path = final_dir / video_filename
-    try:
-        shutil.move(str(temp_video_path), str(final_video_path))
-        # 清理临时目录（容错）
-        try:
-            tmp_root = working_dir / "eval_videos_temp" / f"eval_{step}"
-            if tmp_root.exists():
-                shutil.rmtree(tmp_root)
-        except Exception:
-            pass
-        torchrl_logger.info(f"评估视频已保存: {video_filename}")
-    except Exception as e:
-        torchrl_logger.warning(f"移动评估视频失败: {e}")
-        final_video_path = None
-
-    return {
-        'metrics': eval_metrics,
-        'video_path': str(final_video_path) if final_video_path else None,
-        'step': step,
-        'reward_mean': reward_mean,
-        'completion_rate': completion_rate
-    }
-
-
-def is_time_to_evaluate(current_frames, collected_frames, cfg):
-    prev_frames = collected_frames - current_frames
-    crossed = (prev_frames // cfg.logger.eval_interval) < (collected_frames // cfg.logger.eval_interval)
-    final = collected_frames >= cfg.collector.total_frames
-
-    return True if ((crossed and collected_frames >= cfg.collector.init_random_frames) or final) else False

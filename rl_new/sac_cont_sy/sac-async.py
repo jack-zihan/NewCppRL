@@ -98,8 +98,7 @@ def main(cfg: DictConfig):
         torchrl_logger.info(f"Checkpoint将保存到: {checkpoint_dir}")
 
         # 初始化异步评估器
-        async_evaluator = AsyncEvaluator(max_workers=2)
-        torchrl_logger.info("初始化异步评估器 (max_workers=2)")
+        async_evaluator = AsyncEvaluator(max_workers=cfg.logger.eval_worker)
 
         # ============ 3. 创建模型 ============
         # 使用配置中的环境ID创建模型
