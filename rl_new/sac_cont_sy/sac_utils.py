@@ -374,7 +374,7 @@ def evaluate_policy_standalone(model_path: str, cfg, step: int, position: int = 
         shutil.rmtree(tmp_root)
 
     torchrl_logger.info(f"评估视频已保存: {video_path}")
-
+    torch.cuda.memory.empty_cache() # 清理显存
     return {'metrics': eval_metrics, 'reward_mean': reward_mean, 'completion_rate': completion_rate, 'step': step,
             'video_path': str(video_path) if video_path else None}
 
