@@ -23,8 +23,8 @@ env:
 
 # ============ 数据收集配置 ============
 collector:
-  total_frames: 4_000_000 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
-  frames_per_batch: 20 #32 #20 #20  # 同步模式使用较小批次
+  total_frames: 6_400_000 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
+  frames_per_batch: 32 #32 #20 #20  # 同步模式使用较小批次
   init_random_frames: 50_000 # 50_000  # 减少初始随机帧
   env_per_collector: 32 #100 # 16
   
@@ -78,17 +78,17 @@ loss:
 
 # ============ 编译优化（借鉴官方SAC） ============
 compile:
-  enable: true # true           # 启用torch.compile（5-10x加速）
+  enable: false #true # true           # 启用torch.compile（5-10x加速）
   mode: # reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
   warmup: 2             # compile_with_warmup的预热步数
-  cudagraphs: true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+  cudagraphs: false #true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
 
 # ============ 日志配置 ============
 logger:
   backend: wandb        # wandb, tensorboard, null
   project_name: SAC_2025
   group_name: Weed
-  exp_name: Weed_v2_Recovery-Sync
+  exp_name: Weed_v2_Recovery-Sync-New-Code
   model_name: ContinuousSAC
 
   mode: online          # online, offline
@@ -97,7 +97,7 @@ logger:
   log_freq: 1000 # 5000      # 同步版暂时弃用，日志记录频率（帧数）
 
   # 详细评估配置
-  eval_worker: 3
+  eval_worker: 2
   eval_interval: 50_000 # 25_000   # 评估频率（帧数）
   eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
   eval_max_steps: 5000 #10000   # 每个episode最大步数

@@ -55,7 +55,7 @@ torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能
 tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 
 
-@hydra.main(version_base="1.1", config_path="", config_name="config-sync")
+@hydra.main(version_base="1.1", config_path="", config_name="config-sync-server")
 def main(cfg: DictConfig):  # noqa: F821
     # 处理临时目录路径
     temp_dir = cfg.buffer.temp_dir
