@@ -25,7 +25,7 @@ class SacEvaluator(CustomEvaluator):
             for obs in obss:
                 if isinstance(obs, dict):
                     observation.append(obs['observation'])
-                    vector.append([obs['vector']])
+                    vector.append(obs['vector'])
             observation = torch.from_numpy(np.stack(observation, axis=0)).float().to(self.device)
             vector = torch.tensor(numpy.array(vector)).float().to(self.device)
             actions = actor(observation=observation, vector=vector)[2].tolist()

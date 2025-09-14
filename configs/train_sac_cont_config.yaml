@@ -4,7 +4,7 @@ device: null  # 训练设备，null=自动选择
 
 #pretrained_model: ckpt/train/2024-08-20_04-34-49_Apf/t[01700]_r[316.39].pt
 pretrained_model: null
-ckpt_name: v2_no_traj
+ckpt_name: v2_recovery
 seed: 42
 
 # collector
