@@ -44,6 +44,7 @@ buffer:
   pin_memory: true        # 锁定内存优化
   prefetch: 10 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
   temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
+#  temp_dir: "~/rl_temp_field_train_data"
   shared_memory: True #true    # 使用共享内存提升性能
 
 # ============ 优化器配置 ============
@@ -103,7 +104,7 @@ logger:
   eval_max_steps: 5000 #10000   # 每个episode最大步数
   eval_video: true       # 录制2x2网格视频
   eval_video_skip: 25     # 视频跳帧（减小文件大小）
-  eval_device: cuda:0   # 评估使用的设备
+  eval_device: cpu #cuda:0   # 评估使用的设备
   show_progress: true
 
 # ============ 1.3版本hydra, 提高效率自定义输出地址 ============

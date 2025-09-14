@@ -1,0 +1,1 @@
+python sac.py logger.exp_name="Field_v4_Sync-New-Code-01Try"  buffer.temp_dir="/root/rl_temp_field_train_data" logger.group_name="Field" logger.eval_worker=1
