@@ -132,7 +132,8 @@ def main(cfg: DictConfig):  # noqa: F821
         collector = SyncDataCollector(
             create_env_fn=partial(make_train_environment, cfg), policy=actor_critic[0],  # 提取 actor 用于探索
             init_random_frames=cfg.collector.init_random_frames, total_frames=cfg.collector.total_frames,
-            frames_per_batch=cfg.collector.frames_per_batch, max_frames_per_traj=-1, device=train_device,
+            frames_per_batch=cfg.collector.frames_per_batch, max_frames_per_traj=-1,
+            device=None, policy_device=train_device, storing_device="cpu", env_device="cpu",
             compile_policy={"mode": compile_mode} if compile_mode else False,
             cudagraph_policy={"warmup": 10} if cfg.compile.cudagraphs else False,
         )
@@ -211,7 +212,7 @@ def main(cfg: DictConfig):  # noqa: F821
 
                         with timeit("update"):
                             torch.compiler.cudagraph_mark_step_begin()
-                            loss_td = update_fn(sampled_tensordict).clone()
+                            loss_td = update_fn(sampled_tensordict)
                         losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha")
                         replay_buffer.update_tensordict_priority(sampled_tensordict)  # Update priority
 
@@ -230,14 +231,13 @@ def main(cfg: DictConfig):  # noqa: F821
 
             if collected_frames >= init_random_frames:
                 losses = losses.mean()
-                metrics_to_log["train/q_loss"] = losses.get("loss_qvalue")
-                metrics_to_log["train/actor_loss"] = losses.get("loss_actor")
-                metrics_to_log["train/alpha_loss"] = losses.get("loss_alpha")
-                metrics_to_log["train/alpha"] = loss_td["alpha"]
-                metrics_to_log["train/entropy"] = loss_td["entropy"]
+                metrics_to_log["train/q_loss"] = losses["loss_qvalue"].item()
+                metrics_to_log["train/actor_loss"] = losses["loss_actor"].item()
+                metrics_to_log["train/alpha_loss"] = losses["loss_alpha"].item()
+                metrics_to_log["train/alpha"] = loss_td["alpha"].item()
+                metrics_to_log["train/entropy"] = loss_td["entropy"].item()
 
             # Evaluation
-
             if is_time_to_evaluate(current_frames, collected_frames, cfg):
                 model_path = checkpoint_dir / f"model_s{collected_frames:08d}_eval_pending.pt" # pending表示等待评估
                 torch.save(actor_critic, model_path)
