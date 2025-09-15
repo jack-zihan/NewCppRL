@@ -1,9 +1,9 @@
 """
 异步评估管理器 - 支持并行评估和顺序返回
-基于multiprocessing.Pool实现，通过maxtasksperchild=1确保内存释放
+基于ThreadPoolExecutor实现，避免daemon进程限制问题
 """
 import itertools
-import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from torchrl._utils import logger as torchrl_logger
@@ -14,8 +14,8 @@ class AsyncEvaluator:
     异步评估器 - 支持并行评估但保证结果按顺序返回
     
     特性：
-    - 使用multiprocessing.Pool管理评估进程池
-    - 通过maxtasksperchild=1确保每个任务后进程重启，释放GPU内存
+    - 使用ThreadPoolExecutor管理评估线程池，避免daemon进程限制
+    - 线程可以创建子进程（ParallelEnv），解决了mp.Pool的限制
     - 内置无限任务队列，永不丢失评估请求
     - 支持结果缓存和顺序释放机制
     - 自动处理评估失败的情况
@@ -26,11 +26,11 @@ class AsyncEvaluator:
         初始化异步评估器
         
         Args:
-            max_workers: 最大并行评估进程数，默认为2
+            max_workers: 最大并行评估线程数，默认为2
         """
-        # 使用multiprocessing.Pool替代ProcessPoolExecutor
-        # maxtasksperchild=1确保每个任务完成后进程自动重启，释放GPU内存
-        self.pool = mp.Pool(processes=max_workers, maxtasksperchild=1)
+        # 使用ThreadPoolExecutor替代mp.Pool
+        # 线程可以创建子进程，避免daemon进程限制
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.max_workers = max_workers
         
         # 进度条position分配（循环复用1~max_workers）
@@ -38,13 +38,13 @@ class AsyncEvaluator:
         
         # 顺序控制相关数据结构
         self.submitted_steps: List[int] = []  # 记录提交顺序 [1000, 2000, 3000...]
-        self.pending_results: Dict[int, mp.pool.AsyncResult] = {}  # {step: async_result} 正在执行的任务
+        self.pending_results: Dict[int, Future] = {}  # {step: future} 正在执行的任务
         self.completed_cache: Dict[int, Dict[str, Any]] = {}  # {step: result} 已完成但未返回的结果
         self.next_return_index: int = 0  # 下一个应该返回结果的索引
         
-        torchrl_logger.info(f"AsyncEvaluator初始化完成，max_workers={max_workers}, maxtasksperchild=1")
+        torchrl_logger.info(f"AsyncEvaluator初始化完成，使用ThreadPoolExecutor，max_workers={max_workers}")
     
-    def submit_eval(self, eval_func, model_path: str, cfg: Any, step: int) -> mp.pool.AsyncResult:
+    def submit_eval(self, eval_func, model_path: str, cfg: Any, step: int) -> Future:
         """
         提交评估任务
         
@@ -55,20 +55,20 @@ class AsyncEvaluator:
             step: 训练步数
             
         Returns:
-            AsyncResult对象，可用于查询任务状态
+            Future对象，可用于查询任务状态
         """
         # 循环分配进度条position: 1, 2, ..., max_workers, 1, 2, ...
         position = (next(self._position_counter) - 1) % self.max_workers + 1
         
-        # 提交评估任务到进程池，使用apply_async
-        async_result = self.pool.apply_async(eval_func, args=(model_path, cfg, step, position))
+        # 提交评估任务到线程池，使用submit
+        future = self.executor.submit(eval_func, model_path, cfg, step, position)
         
         # 记录提交信息
         self.submitted_steps.append(step)
-        self.pending_results[step] = async_result
+        self.pending_results[step] = future
         
         torchrl_logger.info(f"提交评估任务: step={step}, position={position}, 当前排队任务数: {len(self.pending_results)}")
-        return async_result
+        return future
     
     def get_evaluate_results(self) -> List[Dict[str, Any]]:
         """
@@ -81,11 +81,11 @@ class AsyncEvaluator:
             按step顺序排列的评估结果列表
         """
         # 1. 检查所有pending results，将完成的结果移到缓存
-        for step, async_result in list(self.pending_results.items()):
-            if async_result.ready():  # 使用ready()检查是否完成
+        for step, future in list(self.pending_results.items()):
+            if future.done():  # 使用done()检查是否完成
                 try:
                     # 获取评估结果，timeout=0立即返回
-                    result = async_result.get(timeout=0)
+                    result = future.result(timeout=0)
                     self.completed_cache[step] = result
                     torchrl_logger.info(f"评估完成: step={step}")
                 except Exception as e:
@@ -152,10 +152,10 @@ class AsyncEvaluator:
                 torchrl_logger.info(f"等待 {remaining} 个评估任务完成...")
                 
             # 等待所有pending的结果
-            for step, async_result in list(self.pending_results.items()):
+            for step, future in list(self.pending_results.items()):
                 try:
-                    # 使用wait等待结果，timeout参数可选
-                    result = async_result.get(timeout=timeout)
+                    # 使用result等待结果，timeout参数可选
+                    result = future.result(timeout=timeout)
                     self.completed_cache[step] = result
                     torchrl_logger.info(f"收集剩余评估结果: step={step}")
                 except Exception as e:
@@ -169,12 +169,8 @@ class AsyncEvaluator:
                 # 从pending中移除
                 del self.pending_results[step]
         
-        # 关闭进程池
-        self.pool.close()
-        if wait:
-            self.pool.join()
-        else:
-            self.pool.terminate()
+        # 关闭线程池
+        self.executor.shutdown(wait=wait)
         
         # 返回所有剩余的已完成但未返回的结果
         remaining_results = []
