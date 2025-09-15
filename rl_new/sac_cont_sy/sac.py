@@ -40,7 +40,7 @@ from torchrl._utils import compile_with_warmup, logger as torchrl_logger, timeit
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
 from torchrl.data import LazyMemmapStorage, LazyTensorStorage, TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
-from torchrl.collectors import SyncDataCollector
+from torchrl.collectors import SyncDataCollector, MultiaSyncDataCollector, aSyncDataCollector
 from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
@@ -129,14 +129,41 @@ def main(cfg: DictConfig):  # noqa: F821
         ).append_transform(lambda td: td.to(train_device))  # 采样后传输到训练设备
 
         # Create off-policy collector
-        collector = SyncDataCollector(
-            create_env_fn=partial(make_train_environment, cfg), policy=actor_critic[0],  # 提取 actor 用于探索
-            init_random_frames=cfg.collector.init_random_frames, total_frames=cfg.collector.total_frames,
-            frames_per_batch=cfg.collector.frames_per_batch, max_frames_per_traj=-1,
-            device=None, policy_device=train_device, storing_device="cpu", env_device="cpu",
-            compile_policy={"mode": compile_mode} if compile_mode else False,
-            cudagraph_policy={"warmup": 10} if cfg.compile.cudagraphs else False,
+        # collector = SyncDataCollector(
+        #     create_env_fn=partial(make_train_environment, cfg), policy=actor_critic[0],  # 提取 actor 用于探索
+        #     init_random_frames=cfg.collector.init_random_frames, total_frames=cfg.collector.total_frames,
+        #     frames_per_batch=cfg.collector.frames_per_batch, max_frames_per_traj=-1,
+        #     device=None, policy_device=train_device, storing_device="cpu", env_device="cpu",
+        #     compile_policy={"mode": compile_mode} if compile_mode else False,
+        #     cudagraph_policy={"warmup": 10} if cfg.compile.cudagraphs else False,
+        # )
+
+        # Create the collector
+        collector = MultiaSyncDataCollector(
+            create_env_fn=[lambda: make_train_environment(cfg, device='cpu')] * cfg.collector.num_collectors,
+            frames_per_batch=cfg.collector.frames_per_batch, total_frames=cfg.collector.total_frames,
+             device=None, policy_device=train_device, storing_device="cpu", env_device="cpu",
+            policy=actor_critic[0], max_frames_per_traj=-1,
         )
+        #
+        # collector = aSyncDataCollector(
+        #     partial(make_train_environment, cfg),
+        #     exploration_policy,
+        #     init_random_frames=0,
+        #     # Currently not supported, but accounted for in script: cfg.collector.init_random_frames,
+        #     frames_per_batch=cfg.collector.frames_per_batch,
+        #     total_frames=-1,
+        #     device=collector_devices,
+        #     env_device=torch.device("cpu"),
+        #     compile_policy={"mode": compile_mode_collector, "warmup": 5} if compile_mode_collector else False,
+        #     cudagraph_policy={"warmup": 20} if cfg.compile.cudagraphs else False,
+        #     replay_buffer=replay_buffer,
+        #     extend_buffer=True,
+        #     postproc=flatten,
+        #     no_cuda_sync=True,  # 放弃CPU对GPU的计算同步等待
+        #     max_frames_per_traj=-1,  # 不分割轨迹
+        # )
+
         collector.set_seed(cfg.seed)
         torchrl_logger.info(f"创建{collector_devices}收集进程 (同步模式)")
 
@@ -226,7 +253,7 @@ def main(cfg: DictConfig):  # noqa: F821
                 episode_length = tensordict["next", "step_count"][episode_end]
                 completion_ratio = tensordict["next", "completion_ratio"][episode_end]
                 metrics_to_log["train/reward"] = episode_rewards.mean().item()
-                metrics_to_log["train/episode_length"] = episode_length.sum() / len(episode_length)
+                metrics_to_log["train/episode_length"] = (episode_length.sum() / len(episode_length)).item()
                 metrics_to_log["train/completion_ratio"] = completion_ratio.mean().item()
 
             if collected_frames >= init_random_frames:

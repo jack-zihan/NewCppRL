@@ -57,7 +57,7 @@ training:
 buffer:
   buffer_size: 10_000 # 400_000 100_000 # Small buffer size to keep only recent elements
   batch_size: 1024 #1024  # 同步模式使用较小批次
-  pin_memory: true        # 锁定内存优化
+  pin_memory: false #false true        # 锁定内存优化
   prefetch: 0 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch
   temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
   shared_memory: true    # 使用共享内存提升性能

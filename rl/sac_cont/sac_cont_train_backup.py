@@ -17,9 +17,7 @@ from torchrl.objectives import SoftUpdate, SACLoss
 from torchrl.record.loggers import get_logger
 
 from rl.sac_cont.sac_cont_utils import make_sac_models
-from torchrl_utils import (
-    make_env
-)
+from torchrl_utils import make_env
 
 base_dir = Path(__file__).parent.parent.parent
 algo_name = 'sac_cont'
