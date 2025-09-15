@@ -98,7 +98,7 @@ logger:
   log_freq: 1000 # 5000      # 同步版暂时弃用，日志记录频率（帧数）
 
   # 详细评估配置
-  eval_worker: 2
+  eval_worker: 1
   eval_interval: 50_000 # 25_000   # 评估频率（帧数）
   eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
   eval_max_steps: 5000 #10000   # 每个episode最大步数
