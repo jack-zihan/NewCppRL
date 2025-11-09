@@ -1,0 +1,144 @@
+# SAC 同步训练（v2 复现版，基于优化脚本）
+
+pretrained_model: null
+seed: 42
+in_server: False
+
+env:
+  env_id: "NewPasture-v2"    # 目标：v2（APF探索/除草）
+  env_kwargs:
+      reward_field_group_coef: 0.125
+      reward_turning_group_coef: 0.0
+      reward_overlap_penalty: 0.0
+      overlap_tolerance: 1.0
+      field_scale_enabled: false
+      field_scale_range: [1.0, 1.0]
+      use_apf: true  # v2环境特有
+      use_trajectory: true
+      use_mist: true
+
+collector:
+  total_frames: 4_000_000
+  frames_per_batch: 20
+  init_random_frames: 50_000
+  env_per_collector: 1
+  num_collectors: 32
+  pin_memory: true
+
+training:
+  device: cuda:0
+  use_amp: False
+  total_updates: 1_000_000
+
+buffer:
+  buffer_size: 500_000
+  batch_size: 2048
+  pin_memory: false
+  prefetch: 10               # 仅在非分桶回放下生效
+  temp_dir: "~/rl_temp_train_data"
+  shared_memory: True
+  bucketed: false            # 关闭分桶：与原 sac.py 对齐
+  bucket_capacity_ratio: [0.25, 0.25, 0.50]
+  success_threshold: 0.99
+  near_end_threshold: 0.90
+  alpha: 0.7                 # 与 sac.py 内置常量保持一致
+  beta: 0.5
+
+optim:
+  lr_actor: 1.0e-5
+  weight_decay_actor: 1.0e-4
+  eps_actor: 1.0e-8
+  lr_critic: 3.0e-4
+  weight_decay_critic: 0
+  eps_critic: 1.0e-8
+  lr_alpha: 3.0e-4
+  weight_decay_alpha: 0
+  eps_alpha: 1.0e-8
+  max_grad_norm: 1.0
+
+loss:
+  gamma: 0.99
+  n_steps: 1                 # 关键：禁用 n-step，使之等价于 sac.py 的 1-step
+  target_update_polyak: 0.9997
+  target_entropy_weight: 0.2
+  target_entropy: "auto"
+  utd_ratio: 1
+  loss_function: l2
+  alpha_init: 1.0
+
+# 关闭 HIF 及预训练（保留结构，便于脚本读取）
+hif:
+  enabled: false
+  decoder_type: "full"
+  initial_weight: 0.0
+  tv_weight: 1.0e-5
+  use_tv: true
+  weights:
+    S1: 0.0
+    S2: 0.0
+    S3: 0.0
+  env_strategy:
+    v4: "skip"
+    v5: "skip"
+    v6: "skip"
+    v5_weight: 0.0
+  online_auxiliary: false
+  update_frequency: 1
+  log_metrics: false
+  log_interval: 100
+  visualize: false
+  vis_interval: 1000
+  pretrain:
+    enabled: false           # 关键：禁用预训练
+    min_buffer_frames: 16384
+    max_updates: 0
+    actor_lr: 3.0e-4
+    loss_weight: 1.0
+    reset_optimizer_after: false
+
+compile:
+  enable: false
+  mode:
+  warmup: 2
+  cudagraphs: false
+
+logger:
+  mode: online
+  backend: wandb
+  project_name: SAC_2025
+  group_name: Weed
+  exp_name: Weed_v2_Repro_from_Optimized
+  model_name: ContinuousSAC
+  eval_worker: 1
+  eval_interval: 50_000
+  eval_episodes: 9
+  eval_max_steps: 5000
+  eval_video: true
+  eval_video_skip: 25
+  eval_device: cpu
+  show_progress: true
+
+curriculum:
+  enabled: false             # 关键：禁用课程学习 → 单阶段（与原 sac.py 相同）
+  s1_consecutive_k: 3
+  s2_consecutive_k: 5
+  s2s3_threshold: 0.05
+  s1_min_completion: 0.90
+  s2_min_completion: 0.95
+  # 注意：优化脚本在 curriculum.enabled=false 时仍会导入“最后一个阶段”的 env_params。
+  # 为确保与 sac.py 等价，这里仅保留一个阶段，并将其 env 参数设为 EnvironmentConfig 的默认值，避免覆盖。
+  stages:
+    - name: S1
+      reward_field_group_coef: 0.125      # 默认值（EnvironmentConfig）
+      reward_turning_group_coef: 0.0      # 默认值（EnvironmentConfig）
+      reward_overlap_penalty: 0.0         # 默认值（EnvironmentConfig）
+      overlap_tolerance: 1.0              # 默认值（EnvironmentConfig）
+      sampling_ratio: [0.34, 0.33, 0.33]  # 无效（bucketed=false 时不使用）
+      field_scale_enabled: false          # 默认值（EnvironmentConfig）
+      field_scale_range: [1.0, 1.0]       # 默认值（EnvironmentConfig）
+
+hydra:
+  job:
+     chdir: true
+  run:
+     dir: outputs/${logger.exp_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}

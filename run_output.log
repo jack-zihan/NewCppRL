@@ -1,0 +1,35 @@
+Error executing job with overrides: []
+Traceback (most recent call last):
+  File "/home/lzh/NewCppRL/rl_new/sac_cont_sy/sac_curriculum_with_pretrain.py", line 352, in <module>
+    main()
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 223, in run_and_report
+    raise ex
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+           ^^^^^^
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ^^^^^^^^^^
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/_internal/hydra.py", line 132, in run
+    _ = ret.return_value
+        ^^^^^^^^^^^^^^^^
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/core/utils.py", line 260, in return_value
+    raise self._return_value
+  File "/home/lzh/NewCppRL/new_venv/lib/python3.12/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lzh/NewCppRL/rl_new/sac_cont_sy/sac_curriculum_with_pretrain.py", line 74, in main
+    shutil.rmtree(temp_dir)
+  File "/usr/lib/python3.12/shutil.py", line 785, in rmtree
+    _rmtree_safe_fd(fd, path, onexc)
+  File "/usr/lib/python3.12/shutil.py", line 697, in _rmtree_safe_fd
+    onexc(os.rmdir, fullname, err)
+  File "/usr/lib/python3.12/shutil.py", line 695, in _rmtree_safe_fd
+    os.rmdir(entry.name, dir_fd=topfd)
+PermissionError: [Errno 13] Permission denied: 'tmpz6vqjux3'
