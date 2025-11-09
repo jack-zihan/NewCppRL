@@ -124,3 +124,12 @@ try:
     )
 except ImportError:
     pass  # v5 might not exist in all configurations
+
+try:
+    from envs_new.cpp_env_v6 import CppEnv as CppEnvV6
+    gymnasium.envs.registration.register(
+        id="NewPasture-v6",
+        entry_point="envs_new.cpp_env_v6:CppEnv",
+    )
+except ImportError:
+    pass  # v6 might not exist in all configurations

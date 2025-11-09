@@ -32,7 +32,7 @@ device = 'cpu'
 video_save_path = '/home/lzh/NewCppRL/ckpt/video'
 # pt_path = f'/home/lzh/NewCppRL/ckpt/sac_cont/0909/sac_our_model_con3_t[02350]_r[2703.08=2662.85~2782.18].pt'
 # pt_path = f'/home/lzh/NewCppRL/ckpt/sac_cont/finetune/t[02350]_r[2782.06=2666.52~2872.77].pt'
-pt_path = f'/home/lzh/NewCppRL/ckpt/sac_cont/finetune/t[01700]_r[2741.21=2632.53~2847.21].pt'
+pt_path = f'/home/lzh/NewCppRL/ckpt/sac_cont/202400915-finetune/t[01700]_r[2741.21=2632.53~2847.21].pt'
 actor_critic = torch.load(pt_path, map_location=device)
 actor = actor_critic[0].to(device)
 

@@ -112,8 +112,7 @@ def stack_maps(maps_dict: Dict[str, Dict[str, Any]]) -> Tuple[np.ndarray, List[f
     Returns:
         (堆叠的地图, 填充值) 元组
     """
-    if not maps_dict:
-        raise ValueError("地图字典为空")
+    if not maps_dict: raise ValueError("地图字典为空")
     
     # 获取第一个地图以确定形状
     first_key = next(iter(maps_dict))

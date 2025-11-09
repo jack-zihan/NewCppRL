@@ -19,7 +19,7 @@ class Agent(ABC):
                  initial_direction: float = 0.0):
         self.config = config
         self._x, self._y = initial_position
-        self._direction = initial_direction % 360.0
+        self._direction = initial_direction % 360.0 # agent的角度确实是东为0°顺时针增大
         self._speed, self._steer = 0.0, 0.0
         self._backup_state()
 
@@ -87,22 +87,23 @@ class Agent(ABC):
 
     @property
     def convex_hull(self) -> np.ndarray:
-        """
-        Agent's convex hull as array of corner points.
-        
-        Calculates 4 corners of rectangular agent rotated by current direction.
-        Uses trigonometric projection with lw_ratio for precise corner positioning.
-        """
-        return np.array([
-            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 0 + self.lw_ratio)),
-             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 0 + self.lw_ratio))),
-            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 180 - self.lw_ratio)),
-             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 180 - self.lw_ratio))),
-            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 180 + self.lw_ratio)),
-             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 180 + self.lw_ratio))),
-            (self._x + 1.0 * self.width * math.cos(math.radians(self._direction + 0 - self.lw_ratio)),
-             self._y + 1.0 * self.width * math.sin(math.radians(self._direction + 0 - self.lw_ratio))),
-        ])
+        """Agent's current convex hull without extra padding."""
+        offsets = np.array([self.lw_ratio, 180 - self.lw_ratio, 180 + self.lw_ratio, -self.lw_ratio]) # 计算偏移
+        angles = np.radians(self._direction + offsets)  # 转换为弧度
+        return np.column_stack([self._x + self.width * np.cos(angles),self._y + self.width * np.sin(angles)])  # 计算顶点坐标 shape (4,2)
+
+    @property
+    def extended_convex_hull(self) -> np.ndarray:
+        """Return convex hull optionally expanded by ``padding_px`` pixels."""
+        if self.config.coverage_extended_px <= 0.0: # 没有padding，直接返回当前凸包
+            return self.convex_hull
+        # 否则计算padding凸包
+        center = np.array([self._x, self._y]) # 计算中心点
+        offsets = self.convex_hull - center # 计算每个顶点相对于中心的偏移
+        norms = np.linalg.norm(offsets, axis=1, keepdims=True) # 计算每个偏移的范数
+        safe_norms = np.maximum(norms, 1e-6) # 避免除零
+        scale = (norms + self.config.coverage_extended_px) / safe_norms # 计算缩放比例
+        return center + offsets * scale # 计算扩展后的顶点坐标
 
     def reset(self, position: Tuple[float, float], direction: float) -> None:
         self._x, self._y = position
@@ -150,8 +151,8 @@ class MowerAgent(Agent):
         self._speed, self._steer = speed, steer
 
     def clip_to_bounds(self, width: float, height: float) -> None:
-        self._x = float(np.clip(self._x, 0, width-1)) # 确保0->width-1开区间
-        self._y = float(np.clip(self._y, 0, height-1))
+        self._x = float(np.clip(self._x, 0, width - 1))  # 确保0->width-1开区间
+        self._y = float(np.clip(self._y, 0, height - 1))
 
 
 class RealAgent(Agent):

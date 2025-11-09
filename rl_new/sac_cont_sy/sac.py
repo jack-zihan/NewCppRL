@@ -48,7 +48,7 @@ from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatt
                                           generate_exp_name, evaluate_policy_parallel, CheckpointManager, log_metrics,
                                           evaluate_policy, evaluate_policy_parallel, setup_torch_cache,
                                           evaluate_policy_standalone, log_evaluate_results, is_time_to_evaluate)
-from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
+from rl_new.sac_cont_sy.env_utils import make_train_environment
 from rl_new.sac_cont_sy.async_evaluator import AsyncEvaluator
 
 torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能

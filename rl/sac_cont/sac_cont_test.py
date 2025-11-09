@@ -54,13 +54,13 @@ class SACTestSession:
     def _load_model(self):
         """Load the SAC model."""
         self.device = self.config['device']
-        actor_critic = torch.load(self.config['model_path']).to(self.device)
+        actor_critic = torch.load(self.config['model_path'], weights_only=False).to(self.device)
         self.actor = actor_critic[0].to(self.device)
-        
+
     def _setup_environment(self):
         """Setup environment with appropriate wrappers."""
         # Load environment config
-        cfg = DictConfig(yaml.load(open(f'{self.base_dir}/configs/env_config.yaml'), Loader=yaml.FullLoader))
+        cfg = DictConfig(yaml.load(open(f'{self.base_dir}/configs/env_config_copy.yaml'), Loader=yaml.FullLoader))
         
         # Create base environment
         self.env = gym.make(
@@ -433,7 +433,7 @@ def main():
         'visualization_figsize': (12, 9),  # Adjustable window size (width, height in inches)
         
         # Model path
-        'model_path': '/home/lzh/NewCppRL/ckpt/sac_cont/0909/sac_our_model_con3_t[02350]_r[2703.08=2662.85~2782.18].pt',
+        'model_path': '/home/lzh/NewCppRL/ckpt/sac_cont/final_t[01700]_r[2741.21=2632.53~2847.21].pt',
         
         # Environment reset options
         'env_reset_options': {

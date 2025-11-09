@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Dict, Any, Optional
 from gymnasium.wrappers import HumanRendering
+from scipy.ndimage import map_coordinates
 
 from envs_new.cpp_env_base import CppEnvBase
 from envs_new.components.config.environment_config import EnvironmentConfig
@@ -26,23 +27,43 @@ class APFCalculator(RewardCalculator):
                   config: EnvironmentConfig = None, **kwargs) -> float:
         """计算基于势场变化的奖励"""
         agent_pos_info = env_state.get_info('agent_position')
-        if len(agent_pos_info) <= 1 or 'map_dict' not in kwargs:
-            return 0.0
+        if len(agent_pos_info) <= 1 or 'map_dict' not in kwargs: return 0.0
 
         apf = kwargs['map_dict']['apf']
 
-        # 获取网格坐标
-        x_curr, y_curr = int(agent_pos_info.current[0]), int(agent_pos_info.current[1])
-        x_prev, y_prev = int(agent_pos_info.last[0]), int(agent_pos_info.last[1])
+        if config.apf_interpolate:
+            # 获得当前帧和上一帧的连续坐标（减0.5以对齐像素中心）
+            coords = np.array([[agent_pos_info.current[1], agent_pos_info.last[1]],
+                               [agent_pos_info.current[0], agent_pos_info.last[0]]]) - 0.5
+            
+            # 批量插值：4个势场 × 2个位置, prefilter=False 表明线性插值不需要预滤波，加速插值
+            field_vals = map_coordinates(apf[0], coords, order=1, mode='nearest', prefilter=False)
+            obstacle_vals = map_coordinates(apf[2], coords, order=1, mode='nearest', prefilter=False)
+            weed_vals = map_coordinates(apf[3], coords, order=1, mode='nearest', prefilter=False)
+            
+            # 计算奖励增量
+            reward_field = 0.0 * (field_vals[0] - field_vals[1])
+            reward_obstacle = min(-0.3 * (obstacle_vals[0] - obstacle_vals[1]), 0)
+            reward_weed = 5.0 * (weed_vals[0] - weed_vals[1])
+            
+            # 轨迹奖励（可选）
+            if len(apf) > 4:
+                traj_vals = map_coordinates(apf[-1], coords, order=1, mode='nearest', prefilter=False)
+                reward_trajectory = min(-0.0 * (traj_vals[0] - traj_vals[1]), 0)
+            else:
+                reward_trajectory = 0
+        else: # 原有离散逻辑
+            x_curr, y_curr = int(agent_pos_info.current[0]), int(agent_pos_info.current[1])
+            x_prev, y_prev = int(agent_pos_info.last[0]), int(agent_pos_info.last[1])
 
-        # 计算各势场的变化量
-        reward_field = 0.0 * (apf[0][y_curr, x_curr] - apf[0][y_prev, x_prev])
-        reward_obstacle = min(-0.3 * (apf[2][y_curr, x_curr] - apf[2][y_prev, x_prev]), 0)  # 只保留惩罚负奖励
-        reward_weed = 5.0 * (apf[3][y_curr, x_curr] - apf[3][y_prev, x_prev])
+            # 计算各势场的变化量
+            reward_field = 0.0 * (apf[0][y_curr, x_curr] - apf[0][y_prev, x_prev])
+            reward_obstacle = min(-0.3 * (apf[2][y_curr, x_curr] - apf[2][y_prev, x_prev]), 0)  # 只保留惩罚负奖励
+            reward_weed = 5.0 * (apf[3][y_curr, x_curr] - apf[3][y_prev, x_prev])
 
-        # 轨迹奖励（可选）
-        reward_trajectory = min(-0.0 * (apf[-1][y_curr, x_curr] - apf[-1][y_prev, x_prev]), 0) \
-            if len(apf) > 4 else 0
+            # 轨迹奖励（可选）
+            reward_trajectory = min(-0.0 * (apf[-1][y_curr, x_curr] - apf[-1][y_prev, x_prev]), 0) \
+                if len(apf) > 4 else 0
 
         return coefficient * (reward_field + reward_obstacle + reward_weed + reward_trajectory)
 
@@ -146,6 +167,8 @@ if __name__ == "__main__":
         # use_multiscale=False, # 是否使用多尺度观察
         # use_global_features=False,
         # num_obstacles_range = [0, 0]
+        # map_dir = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
+        map_dir = "envs_new/maps/indoor_coverage"
     )
     # Note: HumanRendering wrapper would be added here if available
     if if_render: env: CppEnv = HumanRendering(env)  # 封装后，只接收render_mode="rgb_array"的env，使得step和reset的时候展示渲染图像

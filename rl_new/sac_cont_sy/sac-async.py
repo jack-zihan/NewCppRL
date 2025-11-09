@@ -40,7 +40,7 @@ from rl_new.sac_cont_sy.sac_utils import (setup_devices, create_update_fn, flatt
                                           evaluate_policy, evaluate_policy_parallel, setup_torch_cache,
                                           evaluate_policy_standalone, log_evaluate_results)
 from rl_new.sac_cont_sy.async_evaluator import AsyncEvaluator
-from rl_new.sac_cont_sy.env_utils import make_train_environment, make_environment
+from rl_new.sac_cont_sy.env_utils import make_train_environment
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 
 torch.set_float32_matmul_precision("high")  # 提升矩阵乘法性能

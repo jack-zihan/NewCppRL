@@ -1,41 +1,157 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-- `envs/` and `envs_new/`: Gymnasium-compatible mowing robot environments and factory/registration. Prefer `envs_new/` for new work.
-- `rl/` and `rl_new/`: Reinforcement learning algorithms (TorchRL). Use `rl_new/` for SAC continuous control training/eval.
-- `src/`: C++/pybind11 extension (`cpu_apf.cpp`) compiled to `cpu_apf*.so`.
-- `configs/`: YAML configs for environments and training.
-- `tests/` and `test_env_consistency/`: Pytest suites and analysis scripts; use for regression checks.
-- `utils/`, `torchrl_utils*`: Helpers and shared utilities.
-- Output folders (ignored): `ckpt/`, `logs/`, `outputs/`.
+## Project Structure & Module Organization (Updated)
+- `envs_new/`: New, componentized Gymnasium environments for the mowing/coverage robot. Use this for all new work.
+  - Core base and components: `cpp_env_base.py`, `components/{map,dynamics,observation,reward,state}`.
+  - Variants: `cpp_env_v2.py` (APF探索/除草), `cpp_env_v4.py` (覆盖任务+overlap统计), `cpp_env_v5.py` (覆盖+HIF方向场), `cpp_env_v6.py` (时空扩散/衰减HIF)。
+  - Registration: `envs_new/__init__.py` registers `NewPasture-v1..v5` (add v6 similarly if needed).
+- `rl_new/sac_cont_sy/`: Main training stack (TorchRL SAC continuous control) with curriculum learning、分桶优先回放、异步评估与视频。
+  - Entrypoint: `sac_curriculum.py`
+  - Utilities: `env_utils.py`（环境工厂+transforms）、`model_utils.py`（SAC模型）、`sac_utils.py`（评估/日志/ckpt）、`bucketed_replay.py`、`train_utils.py`（collector/replay工厂+curriculum）。
+- `src/`: C++/pybind11 extension (`cpu_apf*.so`) used by APF in v2。
+- `configs/`: YAML configs（部分老配置保留）。sac_cont_sy的主要配置位于 `rl_new/sac_cont_sy/config-*.yaml`。
+- `tests/`、`test_env_consistency/`: Pytest suites and analysis scripts（保持可重复性与回归检查）。
+- `utils/`, `torchrl_utils*`: 通用工具与TorchRL封装。
+- 输出目录（已忽略）：`ckpt/`, `logs/`, `outputs/`, `wandb/` 等。
 
-## Build, Test, and Development Commands
-- Install with extension build: `pip install -e .` (builds `cpu_apf` via pybind11). Or: `python setup.py build_ext --inplace`.
-- Run unit/integration tests: `pytest -q` (from repo root). Example quick smoke: `python tests/env_make.py`.
-- Train (V4): `python rl_new/sac_cont/area_coverage_sac_cont_train.py collector.frames_per_batch=100 collector.total_frames=1000 collector.num_envs=1`.
-- Evaluate (V5): `python rl_new/sac_cont/area_coverage_v5_sac_cont_eval.py --ckpt_path ckpt/area_coverage_v5_sac_cont/<run>/model.pt --episodes 5`.
+## Build, Test, and Development Commands (Updated)
+- 安装并构建扩展：`pip install -e .` 或 `python setup.py build_ext --inplace`
+- 快速环境冒烟：`python tests/env_make.py`
+- 训练（同步 + 课程学习）：`python rl_new/sac_cont_sy/sac_curriculum.py`
+  - 可用Hydra覆盖：例如 `python rl_new/sac_cont_sy/sac_curriculum.py env.env_id=NewPasture-v5 logger.eval_video=false`
+- 测试：`pytest -q`（从仓库根目录）
 
-## Coding Style & Naming Conventions
-- Python: 4-space indentation, type hints where reasonable, docstrings for public APIs.
-- Formatting: `black .`; Imports: `isort .`; Lint: `flake8` (fix before PRs).
-- Naming: modules/packages `snake_case`; classes `CamelCase`; functions/vars `snake_case`.
-- C++ (pybind11): follow existing style; keep headers minimal and functions small.
+## Environments: envs_new 深入理解
+- 设计总览（核心文件）
+  - `cpp_env_base.py`: 统一的Gymnasium环境基类，组装并持有以下组件：
+    - `ScenarioGenerator`（地图+初始场景构建）
+    - `ActionProcessor`（动作解析，不同action_type）
+    - `EnvironmentDynamics`（碰撞/状态更新/依赖拓扑顺序执行Updaters）
+    - `ObservationGenerator`（自我中心视角，多尺度/全局池化可选）
+    - `RewardSystem`（策略模式：可组合奖励项+组系数）
+  - `components/state/environment_state.py`: `StateVariable`（带历史）、`EnvironmentState`（统一管理/静态信息），提供 `weed_coverage_ratio` 与 `field_coverage_ratio` 等。
+  - `components/dynamics/environment_dynamics.py`: Updater机制与执行顺序；内置 `FieldExplorationUpdater/WeedUpdater/AgentUpdater/MistUpdater/TrajectoryUpdater/WeedTaskStatusUpdater`，v4替换为 `FieldCoverageUpdater/FieldTaskStatusUpdater` 并新增 `CoverageOverlapUpdater`。
+  - `components/reward/reward_system.py`: 计算过程：遍历 `AVAILABLE_CALCULATORS`，从 `EnvironmentConfig` 读取 `reward_*`，应用组系数（`field`/`turning`），返回总和与分解。
 
-## Testing Guidelines
-- Framework: `pytest`. Place tests in `tests/` or `test_env_consistency/` as `test_*.py`.
-- Keep tests deterministic (set seeds); skip GPU-heavy paths unless essential.
-- Cover: env reset/step, observation shapes/dtypes, reward/termination logic, and APF consistency.
-- Run: `pytest -q`; for targeted files: `pytest -q tests/test_v4_v5_environments.py`.
+- 重置与步进流程
+  - reset(): `ScenarioGenerator.generate_scenario()` → `EnvironmentDynamics.reset()`（按依赖初始化+一次更新）→ 动态计算观测空间 → 初始观测。
+  - step(): `ActionProcessor.parse_action()` → 碰撞检测/回滚 → 依赖顺序运行Updaters → 生成观测 → 奖励系统聚合 → 终止/截断 → info字典（依环境版本）。
 
-## Commit & Pull Request Guidelines
-- Commits: use Conventional Commits (e.g., `feat:`, `fix:`, `refactor:`). Keep messages imperative and scoped.
-- PRs must include: clear description, reproduction steps, linked issues, test updates, and before/after metrics (logs, screenshots of maps if relevant).
-- Don’ts: commit `ckpt/`, `logs/`, `*.mp4`, local envs (`venv/`, `.venv/`, `new_venv/`).
+- 关键环境变体
+  - v2（探索/除草/APF）：`cpp_env_v2.py`
+    - 观测含APF势场；奖励包含APF增量；`completion_ratio = weed_coverage_ratio`。
+    - info包含 `weed_count/weed_ratio`，通常不含 `overlap_count`。
+  - v4（覆盖任务）：`cpp_env_v4.py`
+    - 移除weed逻辑；覆盖由机器人凸包实现；`CoverageOverlapUpdater` 累计重复覆盖并写入 `env_state.overlap_count`。
+    - `completion_ratio = field_coverage_ratio`；info含 `field_coverage_ratio` 与 `overlap_count`。
+  - v5（覆盖 + HIF方向引导）：`cpp_env_v5.py`
+    - `HIFCreator` 加载每张地图的轴向方向场（-1为无引导）；`OrientationAwareObservationGenerator` 以双倍角向量编码+可选置信度；`HIFCalculator` 奖励对齐。
+  - v6（时空鲁棒HIF）：`cpp_env_v6.py`
+    - 构建 `trajectory_weights/cos/sin`，时间衰减+空间扩散；`EnhancedHIFCalculator` 以轨迹权重与HIF计算加权轴向差，观测增加 `trajectory_weights` 通道。
 
-## Security & Configuration Tips
-- Avoid hardcoded absolute paths; prefer config (`configs/*.yaml`) and `cfg.buffer.scratch_dir` for replay buffers.
-- Do not embed secrets or tokens; use environment variables.
-- Large artifacts belong outside the repo; keep results reproducible via configs and seeds.
+- 注册与ID
+  - `envs_new/__init__.py` 注册 `NewPasture-v1..v5`。如用v6，请在此注册 `NewPasture-v6`→`envs_new.cpp_env_v6:CppEnv`。
+
+- Info键与完成率注意
+  - v2与v4+在 `completion_ratio` 定义不同（weed vs field）；`overlap_count` 仅v4+提供。
+  - 若上游训练/评估假设 `overlap_count` 存在，请基于env_id或键存在性进行防御性处理。
+
+## Training Stack: rl_new/sac_cont_sy 深入理解
+- 入口脚本：`sac_curriculum.py`
+  - 设备/编译/随机种子/日志器/检查点目录初始化。
+  - 课程学习：读取 `config-sync-server.yaml` 的 `curriculum` 配置，初始化阶段并对 `cfg.env.env_kwargs` 注入阶段的奖励系数。
+  - 创建环境/模型/回放/采集器，进入主训练循环：收集→回放扩展→UTD训练→episode指标→按间隔异步评估→按评估结果执行课程阶段迁移→记录metrics→同步采集策略权重。
+
+- 环境构建与Transforms：`env_utils.py`
+  - `make_env_lambda()`: `gym.make(env_id, **env_kwargs)` → `GymWrapper`（可传 `device` 与 `from_pixels`）。默认 `auto_register_info_dict(default_info_dict_reader(keys=['overlap_count']))` 将已存在的同名info键安全映射到tensordict；v2默认无该键，不会强制生成。
+  - `Steps95ToDoneCounter`: 基于 `completion_ratio` 计数“到达95%后到done”的步数，输出 `steps_95_to_done`（root与`next`都有），用于S2→S3的稳定性评估。
+  - `make_drop_pixels_eval_environment()`: 评估端Transform链（CPU上）：`KeepLastPixels → VideoRecorder → DropPixels` + `InitTracker/StepCounter/Steps95/RewardSum/DoubleToFloat`，在录视频同时避免像素随时间堆叠导致内存压力。
+
+- 模型：`model_utils.py`
+  - `make_sac_models(env, device)`: 从环境 `observation_spec` 与 `action_spec` 建立Actor（TanhNormal）与Q网络（ValueOperator），将spec正确移动到目标设备，使用 `env.fake_tensordict()` 进行懒初始化。
+
+- 回放缓冲区
+  - 标准PRB：`TensorDictPrioritizedReplayBuffer` + `LazyMemmapStorage`，可选 `MultiStepTransform` 与 `prefetch`。
+  - 分桶优先回放：`bucketed_replay.py`
+    - 三个内部PRB：SUCCESS/NEAR_END/MID（容量比约1:1:2）。
+    - `extend()`：按 `next.done`、`next.truncated` 与 `next.completion_ratio` 路由到不同桶。
+    - `sample()`：按配置比例抽样；当某桶不足时回退到MID；返回的样本带 `bucket_id` 以路由优先级更新。
+    - `set_sampling_ratio()` 与 `reset_buckets()` 支持课程阶段切换。
+  - 工厂：`train_utils.py:create_replay_buffer()` 统一附加 n-step 与 device transform。
+
+- 采集器：`train_utils.py:create_collector()`
+  - `MultiaSyncDataCollector`，`policy_device` 在训练GPU，`env_device` 在CPU；通过 `frames_per_batch/total_frames` 控制节奏；设置seed保证确定性。
+
+- 异步评估与日志：`async_evaluator.py` + `sac_utils.py`
+  - `AsyncEvaluator`：基于 `ThreadPoolExecutor`，允许线程创建子进程（评估并行环境）；按提交顺序返回结果，失败仅记录日志并跳过。
+  - `evaluate_policy_parallel()`：用CPU并行评估环境执行rollout，统计 `reward/episode_length/completion_ratio`，若存在则附加 `overlap_count` 与 `steps_95_to_done`；可在开启视频时触发 `VideoRecorder.dump()`。
+  - `evaluate_policy_standalone()`：加载待评估的 `ModuleList`，创建 `CSVLogger`（本地mp4），调用并行评估，移动/命名视频，返回指标与视频路径。
+  - `log_evaluate_results()`：一次性向W&B记录标量与视频，将 `*_eval_pending.pt` 重命名为包含 `reward/completion/steps95/overlap` 的文件名片段。
+
+- 课程学习（Curriculum）：`train_utils.py`
+  - 配置：`config-sync-server.yaml` 的 `curriculum` 段包含阶段列表S1/S2/S3（奖励系数与分桶采样比例）。
+  - 判定逻辑：
+    - S1→S2：`completion_ratio ≥ s1_min_completion` 连续K次达标。
+    - S2→S3：`completion_ratio ≥ s2_min_completion` 且 `ratio_95_to_done` 的相对变化率低于阈值，连续K次稳定。
+  - 执行切换：`execute_stage_transition()` 关闭旧采集器→更新回放（分桶改采样比例并清桶/标准重建存储）→更新 `cfg.env.env_kwargs`（注入阶段奖励）→重建采集器。
+
+## End-to-End 运行流程（从reset到异步评估）
+- 环境：reset → 初始化场景/状态 → 第一次更新 → 计算观测；step → 解析动作/碰撞回滚 → Updaters顺序更新 → 生成观测 → 聚合奖励 → 终止状态与info。
+- 训练：采集器产出tensordict → 展平扩展回放（分桶路由） → 抽样UTD训练 → 更新优先级 → 依据 `episode_end` 统计并记录 → 达评估间隔则保存模型并入队异步评估 → 收取已完成评估、可能触发课程阶段切换 → 记录额外指标（buffer三桶规模、阶段、时间统计等） → 同步策略权重到采集器。
+- 评估：CPU并行环境rollout（可录制视频）→ 提取 `next` 中完成回合的统计 → 返回指标；日志端重命名ckpt并上传视频。
+
+## Hydra 配置速查（`rl_new/sac_cont_sy/config-sync-server.yaml`）
+- `env.env_id`: `NewPasture-v4` 默认；可改为 `NewPasture-v2/v5/v6`（注意评估指标差异）。
+- `env.env_kwargs`: 传入环境级参数，如 `reward_*`、多尺度/渲染、`map_dir` 等；课程阶段会动态覆盖奖励相关字段。
+- `collector`: `total_frames/frames_per_batch/init_random_frames/env_per_collector/num_collectors/pin_memory`。
+- `buffer`: `buffer_size/batch_size/pin_memory/prefetch/temp_dir/shared_memory/bucketed/success_threshold/near_end_threshold/alpha/beta`。
+- `loss`: `gamma/n_steps/target_update_polyak/utd_ratio/target_entropy{,_weight}/alpha_init`。
+- `compile`: `enable/mode/warmup/cudagraphs`；`training.use_amp` 控制AMP。
+- `logger`: `backend/mode/project/group/exp_name`；评估：`eval_interval/eval_episodes/eval_max_steps/eval_video/eval_video_skip/eval_device/show_progress`。
+- `curriculum`: `enabled` 与阶段清单（`name/reward_field_group_coef/reward_turning_group_coef/reward_overlap_penalty/sampling_ratio`）、阈值（`s1_min_completion/s2_min_completion/s2s3_threshold`）与连续次数（`s1_consecutive_k/s2_consecutive_k`）。
+
+## 扩展与定制（最短路径）
+- 新环境变体：在 `envs_new/cpp_env_vX.py` 继承 `CppEnvBase` 或 v4/v5，重写 `_get_observation_channels/_get_observation_maps/_get_step_info/_get_completion_ratio`；在 `envs_new/__init__.py` 注册 Gym id。
+- 新奖励项：在 `components/reward/reward_system.py` 实现 `RewardCalculator` 子类，加入 `AVAILABLE_CALCULATORS`，并在 `EnvironmentConfig` 增加 `reward_<name>`；如需要组系数，给 `group` 赋值为 `field` 或 `turning`。
+- 新课程阶段：仅在 `config-sync-server.yaml` 的 `curriculum.stages` 填写 `reward_tweaks` 与 `sampling_ratio`；无需改代码。
+- 调整采样比例：使用分桶回放时在课程阶段配置 `sampling_ratio`；`reset_buckets()` 在阶段切换时自动清理。
+
+## 常见问题与排查
+- 评估报错：`new(): invalid data type 'str'`
+  - 成因：上游指标无条件假设 `overlap_count` 存在且为数值；当 `env_id=NewPasture-v2` 或info被错误注入为字符串时，后续张量操作触发该错误。
+  - 建议：
+    - 评估/训练指标处以“存在且为张量/数值”再聚合；对可能有时间维的键先规整形状（如 `[B,T] → [B]` 按episode_end索引或取末步）。
+    - 明确 `cfg.env.env_id` 与指标假设一致：如需要 `overlap_count`，请使用 v4/v5/v6。
+- `np.bool` 弃用警告：使用 `np.bool_` 以保持兼容（若在自定义info中新增布尔返回）。
+- 评估视频黑帧/内存增长：确保 Transform 顺序为 `KeepLastPixels → VideoRecorder → DropPixels`，并将评估放在CPU以避免显存累积。
+- 分桶样本不足：`sample()` 已自动回退到 MID；关注日志中的 `buffer/{bucket}_size` 指标，必要时调整 `sampling_ratio` 或提升 `total_frames`。
+- HIF文件缺失：v5/v6在 `map_dir` 结构下需要 `hif/human_intent_field_{id}.npy` 或场景目录中 `map_hif.npy`；缺失会抛错。
+- 地图与尺寸：`EnvironmentConfig.get_absolute_map_dir()` 会将相对路径解析到项目根；如自定义，请传绝对路径或保持目录结构。
+
+## Coding Style & Naming Conventions（保持）
+- Python: 4-space indentation，合理使用类型注解，公共API提供docstring。
+- 格式: `black .`；导入: `isort .`；Lint: `flake8`（提交前修复）。
+- 命名: 模块/包 `snake_case`；类 `CamelCase`；函数/变量 `snake_case`。
+- C++（pybind11）: 遵循现有风格，保持头文件最小、函数短小。
+
+## Testing Guidelines（更新）
+- 使用 `pytest`。测试文件放在 `tests/` 或 `test_env_consistency/`，命名为 `test_*.py`。
+- 设置随机种子，避免GPU依赖路径；优先覆盖：
+  - 环境 reset/step 与观测形状/范围/类型；
+  - 奖励分解与完成/终止逻辑；
+  - v2 APF与v4/v5/v6覆盖/overlap统计一致性；
+  - 评估路径健壮性：缺失/字符串型 `overlap_count`、含时间维度的 `steps_95_to_done`、视频Transform链。
+- 运行：`pytest -q`；针对性：`pytest -q tests/test_v4_v5_environments.py`。
+
+## Commit & Pull Request Guidelines（保持）
+- Commits 使用 Conventional Commits（如 `feat:`, `fix:`, `refactor:`），语气保持祈使与聚焦。
+- PR包含：清晰描述、复现步骤、关联issue、测试更新、前后指标（日志/地图截图/视频片段）。
+- 禁止提交：`ckpt/`, `logs/`, `*.mp4`, 本地环境目录（`venv/`, `.venv/`, `new_venv/`）。
+
+## Security & Configuration Tips（保持）
+- 避免硬编码绝对路径；优先通过配置（`rl_new/sac_cont_sy/config-*.yaml`）与 `cfg.buffer.temp_dir`/`scratch_dir` 管理回放目录。
+- 不要提交任何凭证/密钥；使用环境变量。
+- 大体积产物放仓库外；通过配置与随机种子保证可复现。
 
 ## 优雅、高效、简洁、清晰代码设计理念
 

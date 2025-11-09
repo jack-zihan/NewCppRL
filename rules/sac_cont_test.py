@@ -92,8 +92,9 @@ with set_exploration_type(exploration_type), torch.no_grad():
             if isinstance(obs, dict):
                 observation = obs['observation']
                 vector = obs['vector']
+            # observation: [C,H,W] -> [B=1,C,H,W]
             observation = torch.from_numpy(observation).float().to(device).unsqueeze(0)
-            vector = torch.tensor([vector]).float().to(device).unsqueeze(0)
+            vector = torch.tensor(vector).float().to(device).unsqueeze(0)
             # Get Output
             logits = actor(observation=observation, vector=vector)
             action = logits[2][0].tolist()

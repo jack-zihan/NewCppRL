@@ -1,192 +1,271 @@
-"""
-Environment utilities for TorchRL training with new environment system.
-This version uses envs_new environments without YAML dependency.
-"""
-# Import to trigger Gymnasium registration
-import envs_new  # noqa
+"""TorchRL环境工具：envs_new环境创建、HIF包装、Transform链（无YAML依赖）"""
+import envs_new  # noqa - 触发Gymnasium注册
 
-import functools
-import torch
-import gymnasium as gym
-from torchrl.envs import (Compose, DoubleToFloat, EnvCreator, GymWrapper, ParallelEnv, TransformedEnv)
+import functools, torch, numpy as np, gymnasium as gym
+from torchrl.envs import (Compose, DoubleToFloat, EnvBase, EnvCreator, GymWrapper,
+                         ParallelEnv, TransformedEnv)
+from torchrl.envs.gym_like import default_info_dict_reader
 from torchrl.envs.transforms import InitTracker, RewardSum, StepCounter, Transform
 from torchrl.record import VideoRecorder
 
 
-# ====================================================================
-# Environment utils - New implementation without YAML
-# --------------------------------------------------------------------
+class PredEgoHIFInjectionEnv(EnvBase):
+    """HIF预测注入环境包装（v5/v6可视化）：policy(td)["pred_ego_hif"] → env.maps_dict → render()"""
+
+    def __init__(self, env):
+        super().__init__(device=env.device, batch_size=env.batch_size)
+        self._env = env
+        self._make_spec_from_env()
+
+    def _unwrap_to_method(self, method_name: str):
+        """解包到具有指定方法的环境层"""
+        unwrapped = self._env
+        while hasattr(unwrapped, '_env') and not hasattr(unwrapped, method_name):
+            unwrapped = unwrapped._env
+        return unwrapped
+
+    def _step(self, tensordict):
+        """注入HIF预测到环境（fail-fast访问pred_ego_hif）"""
+        pred = tensordict["pred_ego_hif"]  # [B,2,H,W] 或 [2,H,W], fail-fast if model不产生
+        cos2, sin2 = (pred[0,0], pred[0,1]) if pred.dim()==4 else (pred[0], pred[1])
+        if pred.dim() not in (3,4): raise RuntimeError(f"Unexpected pred_ego_hif shape: {pred.shape}")
+
+        cos_np, sin_np = cos2.detach().cpu().numpy(), sin2.detach().cpu().numpy()
+        mag = np.sqrt(sin_np**2 + cos_np**2)
+        pred_dict = {'cosine2': cos_np, 'sine2': sin_np, 'confidence': (mag > 0.5).astype(np.float32)}
+        self._unwrap_to_method('set_pred_hif').set_pred_hif(pred_dict)
+
+        tensordict.pop('pred_ego_hif', None)  # 清理避免内存浪费
+        return self._env.step(tensordict)
+
+    def _set_seed(self, seed):
+        return self._env._set_seed(seed)
+
+    # EnvCreator.init_() 阶段用rand_step避免缺pred_ego_hif触发fail-fast，rollout用_step
+    def rand_step(self, tensordict):
+        return self._env.rand_step(tensordict)
+
+    def _reset(self, tensordict=None, **kwargs):
+        return self._env.reset(tensordict, **kwargs)
+
+    def _make_spec_from_env(self):
+        """从wrapped env复制specs"""
+        for attr in ['observation_spec', 'action_spec', 'reward_spec', 'done_spec']:
+            setattr(self, attr, getattr(self._env, attr).clone())
+
+class HIFBidirectionalEnv(EnvBase):
+    """双向HIF环境：root写入label_ego_hif [3,H,W]（cos2/sin2/confidence）"""
+
+    def __init__(self, env):
+        super().__init__(device=env.device, batch_size=env.batch_size)
+        self._env = env
+        self._make_spec_from_env()
+
+    def _get_base_env(self):
+        """获取最底层Gymnasium环境"""
+        env = self._env
+        while hasattr(env, '_env'):
+            env = env._env
+            if hasattr(env, 'env'): env = env.env  # GymWrapper
+        return env
+
+    def _make_label_hif_tensor(self, label_ego_hif):
+        """提取并转换HIF标签为tensor [3,H,W]"""
+        return torch.from_numpy(np.stack([label_ego_hif['cosine2'], label_ego_hif['sine2'],
+                                         label_ego_hif['confidence']], axis=0)).float()
+
+    def _step(self, tensordict):
+        label_hif = self._make_label_hif_tensor(self._get_base_env().maps_dict['label_ego_hif'])
+        tensordict["label_ego_hif"] = label_hif.to(dtype=torch.float32, device=self.device)
+        return self._env.step(tensordict)
+
+    def _reset(self, tensordict=None, **kwargs):
+        tensordict = self._env.reset(tensordict, **kwargs)
+        label_hif = self._make_label_hif_tensor(self._get_base_env().maps_dict['label_ego_hif'])
+        tensordict["label_ego_hif"] = label_hif.to(dtype=torch.float32, device=self.device)
+        return tensordict
+
+    def _set_seed(self, seed):
+        return self._env._set_seed(seed)
+
+    # EnvCreator.init_() 阶段用rand_step确保底层reward等键正确生成
+    def rand_step(self, tensordict):
+        return self._env.rand_step(tensordict)
+
+    def _make_spec_from_env(self):
+        """从wrapped env复制specs"""
+        for attr in ['observation_spec', 'action_spec', 'reward_spec', 'done_spec']:
+            setattr(self, attr, getattr(self._env, attr).clone())
+
+
+class DropPixels(Transform):
+    """剔除pixels键减少内存：删除'pixels'与('next','pixels')"""
+
+    def _call(self, tensordict):
+        tensordict.pop("pixels", None)
+        if "next" in tensordict.keys(): tensordict["next"].pop("pixels", None)
+        return tensordict
+
+    def _reset(self, tensordict, tensordict_reset):
+        tensordict_reset.pop("pixels", None)
+        return tensordict_reset
+
+
+class KeepLastPixels(Transform):
+    """缓存并行环境的最后有效像素，done/黑帧时复用上一帧避免黑屏（VideoRecorder前置）"""
+
+    def __init__(self):
+        super().__init__(in_keys=[])
+        self._last = None
+
+    def _maybe_init(self, pix: torch.Tensor):
+        if self._last is None or self._last.shape != pix.shape or self._last.device != pix.device:
+            self._last = torch.zeros_like(pix)
+
+    def _replace_mask(self, tensordict, pix: torch.Tensor) -> torch.Tensor:
+        """检测需要替换的帧：像素和为0（黑帧）或done=True"""
+        b = pix.shape[0] if pix.ndim > 0 else 1
+        flat = pix.reshape(b, -1)
+        sums = flat.to(torch.int64).sum(dim=1) if pix.dtype == torch.uint8 else flat.abs().sum(dim=1)
+        zero_mask = sums == 0
+
+        done = tensordict.get("done", None)
+        done_mask = done.reshape(b, -1).any(dim=1) if isinstance(done, torch.Tensor) \
+                    else torch.zeros(b, dtype=torch.bool, device=pix.device)
+        return zero_mask | done_mask
+
+    def _call(self, tensordict):
+        if not isinstance(pix := tensordict.get("pixels", None), torch.Tensor): return tensordict
+
+        self._maybe_init(pix)
+        mask = self._replace_mask(tensordict, pix)
+
+        if mask.any():
+            new_pix = pix.clone()
+            new_pix[mask] = self._last[mask]
+            tensordict.set("pixels", new_pix)
+            pix = new_pix
+
+        if (valid := ~mask).any(): self._last[valid] = pix[valid]
+        return tensordict
+
+    def _reset(self, tensordict, tensordict_reset):
+        pix = tensordict_reset.get("pixels", None)
+        if isinstance(pix, torch.Tensor):
+            self._maybe_init(pix)
+            self._last.copy_(pix)
+        else:
+            self._last = None
+        return tensordict_reset
+
 
 def make_env_lambda(env_id="NewPasture-v2", device="cpu", from_pixels=False, **env_kwargs):
-    """
-    Create a single environment instance.
-
-    Args:
-        env_id: Gymnasium environment ID (NewPasture-v1/v2/v3/v4/v5)
-        device: Device to run the environment on
-        from_pixels: Whether to use pixel observations
-        **env_kwargs: Additional keyword arguments passed to the environment
-            Examples:
-            - use_apf: bool (for v2)
-            - use_multiscale: bool (for v3)
-            - map_dir: str (custom map directory)
-            - num_obstacles_range: tuple (obstacle configuration)
-            - reward_*: float (reward coefficients)
-
-    Returns:
-        GymWrapper: Wrapped environment ready for TorchRL
-    """
-    # Create environment with flexible configuration
+    """创建单环境：gym.make → GymWrapper，可选注册info键（overlap_count）"""
     env = gym.make(env_id, render_mode='rgb_array' if from_pixels else None, **env_kwargs)
-    return GymWrapper(env, device=device, from_pixels=from_pixels, pixels_only=False)  # Wrap for TorchRL compatibility
+    wrapper = GymWrapper(env, device=device, from_pixels=from_pixels, pixels_only=False)
+    try:
+        wrapper = wrapper.auto_register_info_dict(info_dict_reader=default_info_dict_reader(keys=['overlap_count']))
+    except Exception as e:
+        from torchrl._utils import logger as torchrl_logger
+        torchrl_logger.warning(f"auto_register_info_dict failed: {e}, continue without info registration")
+    return wrapper
 
 
-def apply_env_transforms(env):
-    """Apply transforms. No max_episode_steps since env handles it."""
-    return TransformedEnv(env, Compose(InitTracker(), StepCounter(), DoubleToFloat(), RewardSum(), ))
+class Steps95ToDoneCounter(Transform):
+    """统计达到completion≥95%后的步数（并行环境矢量化，暴露于root和next）"""
+
+    def __init__(self, threshold: float = 0.95, out_key: str = "steps_95_to_done"):
+        super().__init__(in_keys=[])
+        self.threshold, self.out_key = float(threshold), out_key
+        self._armed, self._count = None, None  # 将初始化为[B] tensor
+
+    def _call(self, tensordict):
+        completion = tensordict.get("completion_ratio")
+        comp = completion
+        while comp.ndim > 1 and comp.shape[-1] == 1: comp = comp.squeeze(-1)
+        comp, B = comp.reshape(-1), comp.reshape(-1).shape[0]
+
+        # 初始化per-env状态
+        if self._armed is None or self._armed.shape[0] != B:
+            self._armed = torch.zeros(B, dtype=torch.bool, device=completion.device)
+            self._count = torch.zeros(B, dtype=torch.int64, device=completion.device)
+
+        # 累计95%→done步数
+        self._armed |= (comp >= self.threshold)
+        self._count = torch.where(self._armed, self._count + 1, self._count)
+
+        tensordict.set(self.out_key, self._count.reshape(completion.shape).clone())
+        return tensordict
+
+    def _reset(self, tensordict, tensordict_reset):
+        if self._armed is not None: self._armed.zero_()
+        if self._count is not None: self._count.zero_()
+
+        device = self._count.device if self._count is not None else \
+                 (tensordict_reset.device if tensordict_reset.device else torch.device("cpu"))
+        tensordict_reset.set(self.out_key, torch.zeros(tensordict_reset.batch_size, dtype=torch.int64, device=device))
+        return tensordict_reset
 
 
-def make_environment(cfg, logger=None, train_device="cpu", eval_device="cpu"):
-    """Make train and eval environments. Super simple - just pass cfg.env directly."""
+def _wrap_with_hif_injection(base_env, env_id):
+    """HIF预测注入包装（v5/v6）"""
+    return PredEgoHIFInjectionEnv(base_env) if 'v5' in str(env_id).lower() or 'v6' in str(env_id).lower() else base_env
 
-    # 训练环境提前参数绑定
-    partial = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=train_device,
-                                from_pixels=False, **(cfg.env.get('env_kwargs') or {}))
-    parallel_env = ParallelEnv(cfg.collector.env_per_collector, EnvCreator(partial), serial_for_single=True)  # 并行训练环境
-    parallel_env.set_seed(cfg.seed)
-    train_env = apply_env_transforms(parallel_env)
+def _wrap_with_hif_extraction(base_env, cfg):
+    """HIF标签提取包装（v5/v6+HIF训练）"""
+    return HIFBidirectionalEnv(base_env) if cfg.hif.enabled and \
+           ('v5' in str(cfg.env.env_id).lower() or 'v6' in str(cfg.env.env_id).lower()) else base_env
 
-    # 验证环境提前绑定参数
-    partial_eval = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=eval_device,
-                                     from_pixels=cfg.logger.eval_video,
-                                     **(cfg.env.get('env_kwargs') or {}))  # 与训练环境不同的是from_pixels
+def make_train_eval_environment(cfg, logger=None, train_device="cpu", eval_device="cpu"):
+    """创建训练+评估环境（评估可选VideoRecorder）"""
+    train_parallel = _create_parallel_env(cfg, train_device, cfg.collector.env_per_collector, False, cfg.seed)
+    train_env = TransformedEnv(train_parallel, Compose(InitTracker(), StepCounter(), Steps95ToDoneCounter(),
+                                                       DoubleToFloat(), RewardSum()))
+    eval_parallel = _create_parallel_env(cfg, eval_device, cfg.logger.eval_episodes, cfg.logger.eval_video, None)
     trsf_clone = train_env.transform.clone()
-    if cfg.logger.eval_video: trsf_clone.insert(0, VideoRecorder(logger, tag="rendering/test", in_keys=["pixels"],
-                                                                 make_grid=True, skip=cfg.logger.eval_video_skip))
-    eval_env = TransformedEnv(
-        ParallelEnv(cfg.logger.eval_episodes, EnvCreator(partial_eval), serial_for_single=True),
-        trsf_clone)
-    return train_env, eval_env
-
+    if cfg.logger.eval_video:
+        trsf_clone.insert(0, VideoRecorder(logger, tag="rendering/test", in_keys=["pixels"],
+                                           make_grid=True, skip=cfg.logger.eval_video_skip))
+    return train_env, TransformedEnv(eval_parallel, trsf_clone)
 
 def make_train_environment(cfg, device="cpu"):
-    """Make training environment only."""
-    partial = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=device, from_pixels=False,
-                                **(cfg.env.get('env_kwargs') or {}))
-    parallel_env = ParallelEnv(cfg.collector.env_per_collector, EnvCreator(partial), serial_for_single=True)
-    parallel_env.set_seed(cfg.seed)
-    return apply_env_transforms(parallel_env)
-
+    """创建训练环境"""
+    parallel_env = _create_parallel_env(cfg, device, cfg.collector.env_per_collector, False, cfg.seed)
+    return TransformedEnv(parallel_env, Compose(InitTracker(), StepCounter(), Steps95ToDoneCounter(),
+                                                DoubleToFloat(), RewardSum()))
 
 def make_single_environment(cfg, device="cpu", seed=None, from_pixels=False):
-    # 创建基础环境
+    """创建单环境实例"""
     env = make_env_lambda(env_id=cfg.env.env_id, device=device, from_pixels=from_pixels,
-                          **(cfg.env.get('env_kwargs') or {}))  # 传递环境特定参数
-    env = apply_env_transforms(env)  # 应用transforms（与训练环境保持一致）
-    if seed is not None: env.set_seed(seed)  # 设置种子
+                          **(cfg.env.get('env_kwargs') or {}))
+    env = TransformedEnv(env, Compose(InitTracker(), StepCounter(), Steps95ToDoneCounter(),
+                                      DoubleToFloat(), RewardSum()))
+    if seed is not None: env.set_seed(seed)
     return env
 
+def _create_parallel_env(cfg, device, num_parallel, from_pixels=False, seed=None):
+    """创建并行环境（核心复用逻辑）"""
+    env_creator = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=device, from_pixels=from_pixels,
+                                    **(cfg.env.get('env_kwargs') or {}))
+    parallel_env = ParallelEnv(num_parallel, EnvCreator(lambda: _wrap_with_hif_extraction(env_creator(), cfg)),
+                               serial_for_single=True)
+    if seed is not None: parallel_env.set_seed(seed)
+    return parallel_env
 
-# ====================================================================
-# Evaluation-only env with VideoRecorder + DropPixels
-# --------------------------------------------------------------------
 def make_drop_pixels_eval_environment(cfg, logger=None, eval_device="cpu"):
-    """
-    构建仅用于评估的环境：
-    - 环境放在 eval_device（建议 CPU），以便 rollouts 的 TensorDict 堆叠在内存而非显存。
-    - 在 Transform 链中先接入 VideoRecorder（录制 2x2 网格视频），随后接入 DropPixels（剔除 pixels），这样既保留视频上传，又避免像素随时间堆叠带来的内存压力。
-    接口与 make_environment 保持一致，返回 (None, eval_env)。
-    """
+    """评估环境（HIF预测可视化+KeepLastPixels→VideoRecorder→DropPixels链）"""
+    env_creator = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=eval_device,
+                                    from_pixels=cfg.logger.eval_video, **(cfg.env.get("env_kwargs") or {}))
+    eval_parallel = ParallelEnv(cfg.logger.eval_episodes, EnvCreator(lambda: _wrap_with_hif_injection(env_creator(),
+                                                         cfg.env.env_id)), serial_for_single=True)
 
-    class DropPixels(Transform):
-        """在每个 step/reset 之后剔除 pixels 相关键，减少内存占用。
+    trsf = Compose(InitTracker(), StepCounter(max_steps=cfg.logger.eval_max_steps),
+                   Steps95ToDoneCounter(), DoubleToFloat(), RewardSum())
 
-        删除的键包括：'pixels' 与 ('next','pixels')。
-        """
-
-        def _call(self, tensordict):
-            tensordict.pop("pixels", None)  # 当前步像素（若存在）
-            try:
-                tensordict["next"].pop("pixels", None)
-            except Exception:
-                pass
-            return tensordict
-
-        def _reset(self, tensordict, tensordict_reset):
-            tensordict_reset.pop("pixels", None)  # reset 返回的起始观测也剔除像素
-            return tensordict_reset
-
-    class KeepLastPixels(Transform):
-        """在 VideoRecorder 之前缓存每个并行环境的最后有效像素，并在 done/黑帧时复用上一帧，避免黑屏, 仅依赖 'pixels' 与可选的 'done' 键；不改变 spec，仅替换当步返回的像素内容。"""
-
-        def __init__(self):
-            super().__init__(in_keys=[])
-            self._last = None
-
-        def _maybe_init(self, pix: torch.Tensor):
-            if self._last is None or self._last.shape != pix.shape or self._last.device != pix.device:
-                self._last = torch.zeros_like(pix)
-
-        def _replace_mask(self, tensordict, pix: torch.Tensor) -> torch.Tensor:
-            b = pix.shape[0] if pix.ndim > 0 else 1
-            flat = pix.reshape(b, -1)
-            if pix.dtype == torch.uint8:
-                sums = flat.to(torch.int64).sum(dim=1)
-            else:
-                sums = flat.abs().sum(dim=1)
-            zero_mask = sums == 0
-            done = tensordict.get("done", None)
-            if isinstance(done, torch.Tensor):
-                dflat = done.reshape(b, -1)
-                done_mask = dflat.any(dim=1)
-            else:
-                done_mask = torch.zeros(b, dtype=torch.bool, device=pix.device)
-            return zero_mask | done_mask
-
-        def _call(self, tensordict):
-            pix = tensordict.get("pixels", None)
-            if not isinstance(pix, torch.Tensor):
-                return tensordict
-            self._maybe_init(pix)
-            mask = self._replace_mask(tensordict, pix)
-            if mask.any():
-                new_pix = pix.clone()
-                new_pix[mask] = self._last[mask]
-                tensordict.set("pixels", new_pix)
-                pix = new_pix
-            valid = ~mask if mask.ndim > 0 else ~mask
-            if valid.any():
-                self._last[valid] = pix[valid]
-            return tensordict
-
-        def _reset(self, tensordict, tensordict_reset):
-            pix = tensordict_reset.get("pixels", None)
-            if isinstance(pix, torch.Tensor):
-                self._maybe_init(pix)
-                self._last.copy_(pix)
-            else:
-                self._last = None
-            return tensordict_reset
-
-    # 1) 构建并行评估环境（仅评估，不构建训练环境）
-    partial_eval = functools.partial(make_env_lambda, env_id=cfg.env.env_id, device=eval_device,
-                                     from_pixels=cfg.logger.eval_video, **(cfg.env.get("env_kwargs") or {}))
-    eval_parallel = ParallelEnv(cfg.logger.eval_episodes, EnvCreator(partial_eval), serial_for_single=True)
-
-    # 2) 组装 Transform 链
-    trsf = Compose(InitTracker(), StepCounter(max_steps=cfg.logger.eval_max_steps), DoubleToFloat(), RewardSum())
-
-    if cfg.logger.eval_video and logger is not None: # KeepLastPixels -> VideoRecorder -> DropPixels
+    if cfg.logger.eval_video and logger is not None:
         trsf.insert(0, KeepLastPixels())
         trsf.insert(1, VideoRecorder(logger=logger, tag="eval/video", in_keys=["pixels"],
                                      make_grid=True, skip=cfg.logger.eval_video_skip))
         trsf.insert(2, DropPixels())
-    else:
-        # 未开启视频录制也插入 KeepLastPixels + DropPixels（防御性）
-        trsf.insert(0, KeepLastPixels())
-        trsf.insert(1, DropPixels())
 
-    # 3) 构建最终评估环境
-    eval_env = TransformedEnv(eval_parallel, trsf)
-    return None, eval_env
-
+    return None, TransformedEnv(eval_parallel, trsf)

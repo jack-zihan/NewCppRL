@@ -122,6 +122,26 @@ logger:
   eval_device: cuda:0   # 评估使用的设备
   show_progress: true
 
+curriculum:
+  enabled: true
+  consecutive_k: 5  # S2->S3 连续稳定次数
+  stages:
+    - name: S1
+      reward_field_group_coef: 1.0
+      reward_turning_group_coef: 0.5
+      reward_overlap_penalty: 0.0
+      sampling_ratio: [0.40, 0.30, 0.30]
+    - name: S2
+      reward_field_group_coef: 0.5
+      reward_turning_group_coef: 0.2
+      reward_overlap_penalty: -0.10
+      sampling_ratio: [0.30, 0.30, 0.40]
+    - name: S3
+      reward_field_group_coef: 0.10
+      reward_turning_group_coef: 0.05
+      reward_overlap_penalty: -0.20
+      sampling_ratio: [0.20, 0.30, 0.50]
+
 # ============ 1.3版本hydra, 提高效率自定义输出地址 ============
 hydra:
   job:

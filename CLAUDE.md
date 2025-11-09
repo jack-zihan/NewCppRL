@@ -5,114 +5,653 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a C++/Python hybrid reinforcement learning project for robotic navigation and path planning, specifically designed for a mowing robot in pasture environments. The project combines:
+This is a hybrid C++/Python reinforcement learning research project for autonomous robotic navigation in pasture environments. The system combines high-performance simulation with state-of-the-art deep RL algorithms, specifically designed for agricultural robotics applications.
 
-- **Custom C++ optimized APF (Artificial Potential Field) implementation** via pybind11
-- **Deep RL algorithms** (DQN, SAC) using TorchRL framework  
-- **Custom Gymnasium environments** for simulation
-- **Real robot integration** capabilities
-- **Comprehensive visualization and analysis tools**
+### 🚀 Architectural Migration
+
+The project has undergone a fundamental transformation to support advanced research capabilities:
+
+- **Environment System**: `envs/` → `envs_new/`
+  - From monolithic design to component-based architecture with dependency injection
+  - Dynamic composition enables runtime environment modification
+
+- **Training System**: `rl/` → `rl_new/sac_cont_sy/`
+  - From basic RL to three-stage curriculum learning pipeline
+  - Sophisticated experience replay and evaluation systems
+
+### 🎯 Core Innovations
+
+1. **Component-Based Environment Architecture**
+   - Dynamic component composition with dependency injection
+   - Runtime environment modification without code changes
+   - Four specialized environment variants (v2/v4/v5/v6)
+
+2. **Three-Stage Curriculum Learning**
+   - Automatic progression: S1 (exploration) → S2 (efficiency) → S3 (optimization)
+   - Performance-based stage transitions with stability checks
+   - Runtime reward shaping and sampling strategy adaptation
+
+3. **Bucketed Prioritized Experience Replay**
+   - Three-bucket classification: SUCCESS/NEAR_END/MID
+   - Dynamic sampling ratios adjusted per curriculum stage
+   - Fallback mechanism ensures training stability
+
+4. **Asynchronous Evaluation Pipeline**
+   - Non-blocking parallel evaluation with ThreadPoolExecutor
+   - Sequential result ordering for deterministic curriculum decisions
+   - Maintains training throughput while gathering metrics
+
+### 🛠️ Technology Stack
+
+- **RL Framework**: TorchRL with TensorDict for efficient data handling
+- **Algorithm**: Soft Actor-Critic (SAC) with continuous action space
+- **Environment**: Gymnasium-compatible with C++ acceleration via pybind11
+- **Optimization**: CUDA graphs, mixed precision training, torch.compile support
+- **Configuration**: Hydra for flexible experiment management
 
 ## Key Architecture Components
 
-### Environment System (`envs/`)
-- **Base Environment**: `envs/cpp_env_base.py` - Core Gymnasium environment with C++ APF integration
-- **Environment Variants**: 
-  - `cpp_env_v2.py` - Main simulation environment
-  - `cpp_env_v3.py` - Enhanced version with additional features
-  - `cpp_env_real.py` - Real robot environment interface
-- **Core Dependencies**: C++ APF module (`cpu_apf.cpython-*.so`) for efficient potential field calculations
+### 🌍 Environment System (`envs_new/`)
 
-### RL Algorithms (`rl/`)
-- **DQN**: `rl/dqn/` - Discrete action space deep Q-learning
-- **SAC**: `rl/sac_cont/` - Continuous action space soft actor-critic
-- **Training Scripts**: `*_train.py` files are main entry points
-- **Evaluation Scripts**: `*_eval.py` and `*_test.py` for model testing
+#### Component-Based Architecture Overview
 
-### TorchRL Utilities (`torchrl_utils/`)
-- **Environment Factory**: `utils_env.py` - Environment creation and configuration
-- **Custom Components**: Modified DQN loss, video recording, evaluation utilities
-- **Neural Networks**: Custom CNN encoders and network architectures in `model/`
+The environment system follows a component-based design with dependency injection, enabling dynamic composition and runtime modification:
 
-### Configuration System (`configs/`)
-- **Environment Config**: `env_config.yaml` - Environment parameters and settings
-- **Training Configs**: `train_dqn_config.yaml`, `train_sac_cont_config.yaml` - Algorithm-specific hyperparameters
-- **Real Robot Config**: `env_config_real.yaml` - Real-world deployment settings
+```
+CppEnvBase (Orchestrator)
+    │
+    ├── Shared EnvironmentConfig ──→ All components reference single config instance
+    │
+    ├── ScenarioGenerator
+    │   ├── MapCreator components (obstacle, field, weed, coverage, hif)
+    │   └── Generates: agent, maps_dict, env_state
+    │
+    ├── EnvironmentDynamics
+    │   ├── Updater components with dependency resolution
+    │   ├── Topological sort ensures correct execution order
+    │   └── Dynamic add_updater/remove_updater support
+    │
+    ├── ObservationGenerator
+    │   ├── Multi-channel observation stacking
+    │   └── Specialized variants (OrientationAwareObservationGenerator for v5)
+    │
+    ├── RewardSystem
+    │   ├── Calculator components with group coefficients
+    │   └── Runtime coefficient updates for curriculum learning
+    │
+    └── ActionProcessor
+        └── Action space handling (discrete/continuous/multi-discrete)
+```
+
+#### Core Design Patterns
+
+##### 1. StateVariable Pattern - History Tracking with Automatic Deltas
+```python
+class StateVariable[T]:
+    """Generic state variable with configurable history tracking"""
+    def __init__(self, name: str, history_length: int = 2, initial_value: T = None):
+        self._history: deque[T] = deque(maxlen=history_length)
+
+    @property
+    def current(self) -> Optional[T]:
+        return self._history[-1] if self._history else None
+
+    @property
+    def previous(self) -> Optional[T]:
+        return self._history[-2] if len(self._history) >= 2 else None
+
+    def change(self, steps_back: int = 1) -> Any:
+        """Automatic delta computation for numeric/tuple types"""
+        if isinstance(current, (int, float)):
+            return current - past
+        elif isinstance(current, tuple):
+            return tuple(c - p for c, p in zip(current, past))
+```
+
+##### 2. Updater Pattern - Dynamic Components with Dependencies
+```python
+class Updater:
+    """Base class for environment state updaters"""
+    @classmethod
+    def get_dependencies(cls) -> List[str]:
+        """Declare dependencies for topological sorting"""
+        return []  # Override in subclasses
+
+    def update(self, state: Dict[str, Any]) -> None:
+        """Perform state updates - implement in subclasses"""
+        pass
+
+# Automatic dependency resolution in EnvironmentDynamics:
+sorted_updaters = topological_sort(updaters, dependencies)
+for updater in sorted_updaters:
+    updater.update(state_dict)
+```
+
+##### 3. Calculator Pattern - Composable Rewards with Groups
+```python
+class RewardCalculator:
+    """Base class for reward components"""
+    group = None  # Optional: "field_group", "turning_group" for coefficient multiplication
+
+    @classmethod
+    def calculate(cls, env_state, coefficient: float, config, **kwargs) -> float:
+        """Calculate reward component - coefficient includes group multiplication"""
+        return coefficient * computed_value
+
+# Automatic coefficient resolution in RewardSystem:
+coefficient = getattr(config, f"reward_{name}", 0.0)
+if calculator.group:
+    group_coef = getattr(config, f"reward_{calculator.group}_coef", 1.0)
+    coefficient *= group_coef
+```
+
+#### Environment Versions Comparison
+
+| Version | Task | Key Innovation | Observation Channels | Core Components |
+|---------|------|----------------|---------------------|-----------------|
+| **v2** | Weeding in unknown environment | APF (Artificial Potential Field) for weed attraction | 4: field, obstacle, weed, trajectory | `APFCalculator` with GPU/CPU adaptive computation<br>`WeedRemovalCalculator` for sparse rewards |
+| **v4** | Pure field coverage | Overlap tracking without weeding | 3: field, obstacle, trajectory | `FieldCoverageUpdater` replaces exploration<br>`CoverageMapCreator` for overlap counting |
+| **v5** | HIF-guided coverage | Human Intention Field with orientation | 5: field, obstacle, trajectory, global_cosine, global_sine | `OrientationAwareObservationGenerator`<br>Double-angle encoding for axial symmetry |
+| **v6** | Spatiotemporal coverage | Decaying reward fields over time | (Configuration similar to v5) | Temporal reward decay mechanisms |
+
+#### Detailed Environment Implementations
+
+##### v2: APF-Enhanced Weeding Environment
+- **File**: `envs_new/cpp_env_v2.py`
+- **Purpose**: Learn exploration strategies with sparse weed rewards
+- **Key Innovation**: Artificial Potential Field
+  ```python
+  # Exponential decay potential field
+  def get_discounted_apf(binary_map, propagate_distance):
+      distance_map = gpu_apf_bool(binary_map) if cuda else cpu_apf_bool(binary_map)
+      gamma = (propagate_distance - 1) / propagate_distance
+      potential_field = gamma ** distance_map  # Exponential decay
+      return potential_field
+  ```
+- **Reward Components**: Base penalty + Weed removal + APF guidance + Field exploration
+
+##### v4: Pure Coverage Environment
+- **File**: `envs_new/cpp_env_v4.py`
+- **Purpose**: Maximize coverage while minimizing overlap
+- **Key Changes from Base**:
+  ```python
+  # Remove weed-related components
+  self.scenario_generator.remove_component('weed')
+  self.reward_system.remove_calculator('weed_removal')
+  self.env_dynamics.remove_updater('weed')
+
+  # Replace with coverage-specific components
+  self.env_dynamics.remove_updater('field')
+  self.env_dynamics.add_updater('field', FieldCoverageUpdater())
+  self.scenario_generator.add_component('coverage', CoverageMapCreator())
+  self.env_dynamics.add_updater('coverage_overlap', CoverageOverlapUpdater())
+  ```
+- **Default Configuration**: No obstacles, 768×768 resolution, trajectory enabled
+
+##### v5: HIF-Guided Coverage Environment
+- **File**: `envs_new/cpp_env_v5.py`
+- **Purpose**: Human-intention-guided coverage with orientation awareness
+- **Key Innovation**: Double-angle encoding for orientation
+  ```python
+  # Double-angle encoding ensures θ and θ+180° map to same vector
+  double_angles = 2.0 * angles_image
+  global_cosine = np.cos(double_angles) * confidence
+  global_sine = np.sin(double_angles) * confidence
+  ```
+- **HIF Construction**: Frontier-based diffusion with exponential decay
+- **Configuration Parameters**: `hif_propagate_distance`, `hif_decay_gamma`
+
+#### Extension Guide
+
+##### Adding a New Environment Version
+```python
+class CppEnvV7(CppEnvBase):
+    def __init__(self, **kwargs):
+        # Set version-specific defaults
+        v7_defaults = {
+            'use_your_feature': True,
+            'your_parameter': 100
+        }
+        super().__init__(**{**v7_defaults, **kwargs})
+
+        # Modify components
+        self.scenario_generator.add_component('your_map', YourMapCreator())
+        self.env_dynamics.add_updater('your_updater', YourUpdater())
+        self.reward_system.add_calculator('your_reward', YourCalculator())
+
+    def _get_observation_channels(self) -> int:
+        return 4  # Your channel count
+
+    def _get_observation_maps(self) -> Dict:
+        # Define observation layers
+        return {'field': {...}, 'obstacle': {...}, 'your_layer': {...}}
+```
+
+##### Adding a New Updater Component
+```python
+class YourUpdater(Updater):
+    @classmethod
+    def get_dependencies(cls) -> List[str]:
+        return ['agent_motion']  # Must run after agent position updates
+
+    def update(self, state: Dict[str, Any]) -> None:
+        agent = state['agent']
+        maps = state['maps']
+        env_state = state['env_state']
+
+        # Your update logic here
+        env_state.your_metric.set(computed_value)
+```
+
+##### Adding a New Reward Calculator
+```python
+class YourRewardCalculator(RewardCalculator):
+    group = "field_group"  # Optional: inherit group coefficient
+
+    @classmethod
+    def calculate(cls, env_state, coefficient: float, config, **kwargs) -> float:
+        # Coefficient already includes group multiplication
+        your_metric = env_state.your_metric.current
+        previous = env_state.your_metric.previous
+        return coefficient * (your_metric - previous)
+
+# Register in config/environment_config.py:
+reward_your_component: float = 1.0  # Automatically mapped
+```
+
+### 🎓 Training System (`rl_new/sac_cont_sy/`)
+
+#### Training Pipeline Architecture
+
+```
+sac_curriculum.py (Main Orchestrator)
+    │
+    ├── Data Collection Layer
+    │   └── SyncDataCollector
+    │       └── ParallelEnv (env_per_collector × num_collectors workers)
+    │           └── TransformedEnv with custom transform chain
+    │
+    ├── Experience Replay Layer
+    │   └── BucketedTensorDictPrioritizedReplayBuffer
+    │       ├── SUCCESS bucket (25% capacity): done & completion≥99% & ~truncated
+    │       ├── NEAR_END bucket (25% capacity): completion≥90% & ~SUCCESS
+    │       └── MID bucket (50% capacity): everything else (with fallback role)
+    │
+    ├── Model Update Layer
+    │   └── SAC Algorithm
+    │       ├── Actor: ProbabilisticActor with TanhNormal distribution
+    │       ├── Critic: Twin Q-networks for stability
+    │       └── Alpha: Automatic temperature tuning
+    │
+    └── Evaluation Layer
+        └── AsyncEvaluator
+            ├── ThreadPoolExecutor for parallel rollouts
+            └── Sequential result ordering mechanism
+```
+
+#### Three-Stage Curriculum Learning System
+
+##### Stage Progression and Rationale
+```
+Stage 1 (S1): Learning to Scan
+├── Goal: Learn basic field coverage patterns
+├── Reward: High field_group_coef (1.0), moderate turning penalty (0.5)
+├── Sampling: [0.40, 0.30, 0.30] - balanced exploration
+├── Transition: completion_ratio ≥ 90% for 3 consecutive evaluations
+└── Rationale: Diverse experiences needed for initial exploration
+    ↓
+Stage 2 (S2): Reducing Overlap
+├── Goal: Optimize path efficiency
+├── Reward: Reduced field_group_coef (0.5), overlap penalty (-0.10) introduced
+├── Sampling: [0.30, 0.30, 0.40] - more mid-game optimization
+├── Transition: completion ≥ 95% AND ratio95_to_done stable (<5% change) for 5 evals
+└── Rationale: Stability check ensures policy convergence before final stage
+    ↓
+Stage 3 (S3): Final Optimization
+├── Goal: Polish for maximum efficiency
+├── Reward: Minimal field_group_coef (0.10), high overlap penalty (-0.20)
+├── Sampling: [0.20, 0.30, 0.50] - heavy mid-game focus
+└── Terminal: No further transitions
+```
+
+##### Implementation Architecture (`train_utils.py`)
+
+```python
+# Pure function - no side effects
+def update_curriculum_state(state, config, metrics) -> Tuple[CurriculumState, bool]:
+    """Returns (new_state, should_transition) without modifying environment"""
+
+    if stage_idx == 0:  # S1 logic
+        consecutive_count = count + 1 if completion >= 0.90 else 0
+        should_transition = consecutive_count >= config['s1_consecutive_k']
+
+    elif stage_idx == 1:  # S2 logic
+        ratio_95_to_done = metrics['ratio_95_to_done']
+        relative_change = abs(ratio - last_ratio) / max(last_ratio, 1e-6)
+        is_stable = completion >= 0.95 and relative_change < config['s2s3_threshold']
+        consecutive_stable = stable_count + 1 if is_stable else 0
+        should_transition = consecutive_stable >= config['s2_consecutive_k']
+
+    return new_state, should_transition
+
+# Side-effect function - modifies system
+def execute_stage_transition(next_stage, cfg, collector, replay_buffer, ...):
+    """Shutdown, rebuild components, update configuration"""
+
+    # 1. Shutdown old collector
+    collector.shutdown()
+
+    # 2. Update configuration with new reward coefficients
+    cfg.env.env_kwargs.update(next_stage['reward_tweaks'])
+
+    # 3. Update replay buffer sampling strategy
+    replay_buffer.set_sampling_ratio(next_stage['sampling_ratio'])
+
+    # 4. Create new collector with updated config
+    new_collector = create_collector(cfg, actor_model, device)
+
+    return new_collector, replay_buffer, iter(new_collector)
+```
+
+#### Bucketed Prioritized Replay Buffer
+
+##### Design Philosophy
+The bucketed replay system addresses the fundamental challenge of sparse rewards in coverage tasks by ensuring balanced sampling across different task completion states.
+
+##### Implementation (`bucketed_replay.py`)
+```python
+class BucketedTensorDictPrioritizedReplayBuffer:
+    """Three-bucket system with dynamic sampling and fallback mechanism"""
+
+    def __init__(self, ...):
+        # Fixed capacity allocation (ensures fallback space)
+        capacity_success = max_size // 4   # 25%
+        capacity_near_end = max_size // 4  # 25%
+        capacity_mid = max_size // 2       # 50% (extra for fallback)
+
+    def extend(self, tensordict):
+        """Classify and route transitions to appropriate buckets"""
+        completion = tensordict[("next", "completion_ratio")]
+        done = tensordict[("next", "done")]
+        truncated = tensordict[("next", "truncated")]
+
+        # Classification logic
+        success_mask = done & (completion >= 0.99) & (~truncated)
+        near_end_mask = (completion >= 0.90) & (~success_mask)
+        mid_mask = ~(success_mask | near_end_mask)
+
+        # Route to buckets
+        if success_mask.any():
+            self._buffers[BucketId.SUCCESS].extend(tensordict[success_mask])
+        # Similar for NEAR_END and MID
+
+    def sample(self) -> TensorDict:
+        """Sample with dynamic ratios and fallback to MID"""
+        n_success = int(batch_size * success_ratio)
+        n_near_end = int(batch_size * near_end_ratio)
+        n_mid = batch_size - n_success - n_near_end
+
+        def _safe_sample(bucket_id, n):
+            try:
+                return self._buffers[bucket_id].sample(n)
+            except (RuntimeError, ValueError):
+                if bucket_id != BucketId.MID:
+                    return self._buffers[BucketId.MID].sample(n)  # Fallback
+                raise  # MID bucket failure is fatal
+
+        # Combine samples from all buckets
+        parts = [_safe_sample(bid, n) for bid, n in ...]
+        return torch.cat(parts, dim=0)
+```
+
+##### Why This Design Works
+1. **Early Training**: SUCCESS bucket often empty → fallback to MID ensures training continues
+2. **Mid Training**: Balanced sampling across all buckets
+3. **Late Training**: Focus shifts to MID for trajectory optimization
+4. **Curriculum Integration**: Sampling ratios adjust automatically per stage
+
+#### Asynchronous Evaluation System
+
+##### Problem and Solution
+**Problem**: Evaluation rollouts are expensive (5-10 seconds per batch), blocking training reduces throughput by 30-50%.
+
+**Solution**: Non-blocking evaluation with deterministic ordering for curriculum decisions.
+
+##### Implementation (`async_evaluator.py`)
+```python
+class AsyncEvaluator:
+    """Parallel evaluation with sequential result ordering"""
+
+    def __init__(self, max_workers=2):
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.submitted_steps = []        # Submission order
+        self.pending_results = {}        # step → Future
+        self.completed_cache = {}        # step → result
+        self.next_return_index = 0       # Next result to release
+
+    def submit_eval(self, eval_func, model_path, cfg, step):
+        """Submit evaluation task without blocking"""
+        position = self._get_worker_position()  # For logging
+        future = self.executor.submit(eval_func, model_path, cfg, step, position)
+        self.submitted_steps.append(step)
+        self.pending_results[step] = future
+
+    def get_evaluate_results(self) -> List[Dict]:
+        """Return completed results in submission order"""
+        # Move completed futures to cache
+        for step, future in list(self.pending_results.items()):
+            if future.done():
+                self.completed_cache[step] = future.result()
+                del self.pending_results[step]
+
+        # Release results maintaining order
+        ordered_results = []
+        while self.next_return_index < len(self.submitted_steps):
+            next_step = self.submitted_steps[self.next_return_index]
+            if next_step in self.completed_cache:
+                ordered_results.append(self.completed_cache.pop(next_step))
+                self.next_return_index += 1
+            else:
+                break  # Wait for next in sequence
+
+        return ordered_results
+```
+
+##### Critical Design Decision
+Sequential ordering is essential because curriculum state transitions must be deterministic. Out-of-order results would cause incorrect stage transitions.
+
+#### Key Utility Modules
+
+##### Environment Creation (`env_utils.py`)
+
+**Transform Chain for Evaluation**:
+```python
+# Problem: Black frames in videos when episodes end
+# Solution: Three-transform chain
+
+class KeepLastPixels(Transform):
+    """Cache last valid frame per environment"""
+    def _call(self, tensordict):
+        if pixel_sum == 0 or done:
+            use_cached_frame()
+
+class VideoRecorder(Transform):
+    """Record 2x2 grid videos"""
+    # Process pixels for video
+
+class DropPixels(Transform):
+    """Remove pixels to save memory"""
+    def _call(self, tensordict):
+        tensordict.pop("pixels", None)
+        tensordict["next"].pop("pixels", None)  # Direct access, not ellipsis
+
+# Chain: KeepLastPixels → VideoRecorder → DropPixels
+```
+
+**Custom Metric Transform**:
+```python
+class Steps95ToDoneCounter(Transform):
+    """Count steps from 95% completion to episode end"""
+    def __init__(self):
+        self._armed = None  # Per-env boolean tensor
+        self._count = None  # Per-env counter tensor
+
+    def _call(self, tensordict):
+        B = tensordict.batch_size[0]  # Parallel environments
+
+        # Initialize per-env state
+        if self._armed is None:
+            self._armed = torch.zeros(B, dtype=torch.bool)
+            self._count = torch.zeros(B, dtype=torch.int64)
+
+        # Vectorized computation
+        completion = tensordict["completion_ratio"].reshape(B)
+        self._armed |= (completion >= 0.95)
+        self._count = torch.where(self._armed, self._count + 1, self._count)
+```
+
+##### Model Creation (`model_utils.py`)
+
+**Critical Device Handling Fix**:
+```python
+def make_sac_models(env, device="cpu"):
+    """Create SAC models with correct device placement"""
+
+    # CRITICAL: Move action_spec to device BEFORE creating distribution
+    action_spec = env.action_spec
+    if env.batch_size:
+        action_spec = action_spec[(0,) * len(env.batch_size)]
+    action_spec = action_spec.to(device)  # Must be before distribution creation!
+
+    # TanhNormal stores bounds as buffers - they inherit device from action_spec
+    policy = ProbabilisticActor(
+        spec=action_spec,
+        distribution_kwargs={
+            "low": action_spec.space.low,   # Now on correct device
+            "high": action_spec.space.high,  # Now on correct device
+        }
+    )
+```
+
+#### Training Configuration System
+
+##### Hydra-Based Configuration (`config-sync-server.yaml`)
+```yaml
+env:
+  env_id: "NewPasture-v4"  # or v2, v5, v6
+  env_kwargs:  # Passed directly to gym.make()
+    # These get updated during curriculum transitions
+    reward_field_group_coef: 1.0
+    reward_turning_group_coef: 0.5
+    reward_overlap_penalty: 0.0
+
+curriculum:
+  enabled: true
+  s1_consecutive_k: 3  # S1→S2 transition threshold
+  s2_consecutive_k: 5  # S2→S3 transition threshold
+  s2s3_threshold: 0.05  # Stability threshold for S2→S3
+
+  stages:
+    - name: S1
+      reward_tweaks:
+        reward_field_group_coef: 1.0
+        reward_turning_group_coef: 0.5
+        reward_overlap_penalty: 0.0
+      sampling_ratio: [0.40, 0.30, 0.30]
+
+    - name: S2
+      reward_tweaks:
+        reward_field_group_coef: 0.5
+        reward_turning_group_coef: 0.2
+        reward_overlap_penalty: -0.10
+      sampling_ratio: [0.30, 0.30, 0.40]
+
+    - name: S3
+      reward_tweaks:
+        reward_field_group_coef: 0.10
+        reward_turning_group_coef: 0.05
+        reward_overlap_penalty: -0.20
+      sampling_ratio: [0.20, 0.30, 0.50]
+
+buffer:
+  bucketed: true
+  buffer_size: 500_000
+  batch_size: 2048
+  success_threshold: 0.99
+  near_end_threshold: 0.90
+  bucket_capacity_ratio: [0.25, 0.25, 0.50]
+```
+
+##### Runtime Configuration Mutation
+The key innovation is that configuration can be mutated at runtime during curriculum transitions:
+```python
+# During stage transition
+cfg.env.env_kwargs.update(next_stage['reward_tweaks'])
+new_collector = create_collector(cfg, ...)  # New environments use updated config
+```
 
 ## Common Development Commands
 
-### Build C++ Extension
+### Training with Curriculum Learning
 ```bash
-python setup.py build_ext --inplace
+# Activate environment (注意是new_venv而非venv)
+source new_venv/bin/activate
+
+# Run curriculum training (v4 environment by default)
+cd rl_new/sac_cont_sy
+python sac_curriculum.py
+
+# Override configuration via Hydra
+python sac_curriculum.py env.env_id=NewPasture-v5 \
+                        curriculum.enabled=true \
+                        buffer.bucketed=true
+
+# Use different config files
+python sac_curriculum.py --config-name config-sync-server  # Server configuration
+python sac_curriculum.py --config-name config-async        # Async collector mode
 ```
 
-### Training Commands
+### Environment Testing and Development
 ```bash
-# DQN training
-python -m rl.dqn.dqn_train
+# Test individual environment versions
+python envs_new/cpp_env_v4.py  # Has __main__ block for interactive testing
+python envs_new/cpp_env_v5.py  # Test HIF environment
 
-# SAC training  
-python -m rl.sac_cont.sac_cont_train
+# Quick environment validation
+python -c "from envs_new.cpp_env_v4 import CppEnv; env = CppEnv(); obs, _ = env.reset(); print(f'v4 OK: {obs[\"observation\"].shape}')"
 
-# Test environment performance
-python tests/test_env_time_cost.py
+# Test with specific configurations
+python -c "
+from envs_new.cpp_env_v5 import CppEnv
+env = CppEnv(
+    use_hif=True,
+    hif_propagate_distance=20,
+    num_obstacles_range=(3, 5),
+    render_mode='rgb_array'
+)
+obs, _ = env.reset(seed=42)
+print(f'HIF channels: {obs[\"observation\"].shape}')
+"
 ```
 
-### Environment Testing
+### Development Workflow for New Features
 ```bash
-# Basic environment test
-python tests/test_env_time_cost.py
+# 1. Create new environment version
+cp envs_new/cpp_env_v5.py envs_new/cpp_env_v6.py
+# Edit to add your features
 
-# APF algorithm test
-python tests/test_apf.py
+# 2. Test environment standalone
+python envs_new/cpp_env_v6.py
 
-# Multiprocessing test
-python tests/test_multiprocessing.py
+# 3. Register in Gymnasium
+# Edit envs_new/__init__.py to add registration
+
+# 4. Test with training pipeline
+python rl_new/sac_cont_sy/sac_curriculum.py env.env_id=NewPasture-v6
+
+# 5. Monitor training with wandb
+# Logs automatically uploaded to wandb project: SAC_2025
 ```
-
-### Video Generation and Analysis
-```bash
-# Generate training videos (various versions in utils/)
-python utils/visualize_real_world_video_v*.py
-
-# Real world data refinement
-python utils/refine_real_world_v*.py
-
-# Trajectory visualization  
-python utils/global_trajectory_draw*.py
-```
-
-## Project-Specific Technical Details
-
-### Action Spaces
-- **Discrete**: 7×21 action grid (velocity × angular velocity discretization)
-- **Continuous**: Direct velocity commands with ranges v∈[0, 3.5], ω∈[-28.6, 28.6]
-
-### State Representation
-- **Vision**: 128×128 pixel first-person view with 28-unit vision length, 75° field of view
-- **Global Features**: SGCNN-processed 16×16 global map features
-- **APF Integration**: C++ optimized artificial potential field for obstacle avoidance
-
-### Environment Features
-- **Dynamic Obstacles**: 0-8 randomly placed obstacles per episode
-- **Trajectory Tracking**: Optional trajectory following objectives
-- **Noise Injection**: Configurable position, direction, and perception noise
-- **Box Boundaries**: Configurable boundary conditions
-
-### Model Checkpoints
-- Stored in `ckpt/{algorithm_name}/{timestamp}_config/`
-- Format: `t[step]_r[reward].pt`
-- Automatic checkpoint management during training
-
-### Real Robot Integration
-- Real-world environment interface in `envs/cpp_env_real.py`
-- Tracking data processing in `utils/tracking_data_*.json`
-- Video annotation and refinement tools for real-world validation
-
-### Video and Visualization
-- Training videos automatically saved to `ckpt/video/`
-- Real-world experiment videos in `utils/` with annotation tools
-- Comprehensive visualization pipeline for trajectory analysis
 
 ## Dependencies and Environment Setup
 
@@ -585,3 +1124,139 @@ Claude should regularly:
 
 ## 注意
 在每一次规划和代码优化行动前，思考目前需要解决什么问题，什么解决方案最好最合适，什么样的代码实现最优雅、高效、简洁、清晰，给出最好、最合适的方案，三思而后行，不要给不好的方法，增加人工矫正量。
+
+核心哲学陈述
+
+  精准研究代码需要科学家心态：通过源码分析确认deterministic行为而非防御性猜测，fail-fast暴露问题而非try-except掩盖未知，在bug所
+  在抽象层最小修改而非跨边界架构重构。信任基于证据（分析TorchRL源码确认completion_ratio位置），修复尊重边界（Transform内部矢量
+  化，不触及环境层），Less is More意味着单文件15行修复而非多文件40行重构。研究的本质是精准定位而非优雅降级。
+
+  金句：代码应该像仪器：准确报错比优雅掩盖更有价值。
+
+  ---
+  ★ Insight ─────────────────────────────────────
+
+  心态转变的本质：从"防御者"到"科学家"
+
+  这不仅仅是技术选择，而是思维模式的根本差异：
+  - 防御者假设未知并提前保护
+  - 科学家分析确定并精准修复
+
+  研究代码的价值在于揭示真相，而非隐藏问题。
+
+  ─────────────────────────────────────────────────
+
+  五大核心原则对比
+
+  1. 基于证据的信任 (Evidence-Based Trust)
+
+  | 错误做法                                     | 正确做法                                     |
+  |------------------------------------------|------------------------------------------|
+  | ❌ 假设completion_ratio可能不存在 → 添加try-except | ✅ 分析TorchRL源码 → 确认deterministic行为 → 直接访问 |
+  | ❌ 用get()加默认值防御未知                         | ✅ 用直接访问暴露配置错误                            |
+  | ❌ "可能会出问题，先保护"                           | ✅ "分析确认不会出问题，信任框架"                       |
+
+  教训：tensordict[("next", "completion_ratio")] 比 tensordict.get(("next", "completion_ratio"), 0.0)
+  更好，因为前者在配置错误时crash并暴露问题。
+
+  2. 确定性优先思维 (Determinism over Speculation)
+
+  | 错误做法                                       | 正确做法                                                                 |
+  |--------------------------------------------|----------------------------------------------------------------------|
+  | ❌ "completion_ratio可能在各种位置..." → try多种访问方式 | ✅ "查看env._generate_observation() → 确认返回dict →
+  GymWrapper映射规则 → 确定位置" |
+  | ❌ 为可能的边界情况添加防御                             | ✅ 分析实际数据流，只处理确定会发生的情况
+                          |
+
+  教训：10分钟源码分析优于30分钟防御性编程。
+
+  3. 场景适配心态 (Context-Appropriate Mindset)
+
+  | 生产系统            | 研究代码               |
+  |-----------------|--------------------|
+  | Fail-safe（优雅降级） | Fail-fast（立即crash） |
+  | Try-except捕获异常  | 让异常暴露问题            |
+  | 默认值容错           | 严格验证配置             |
+  | 用户体验优先          | 调试效率优先             |
+
+  教训：用户说"这不是在修复可运行的系统，而是在做精准的强化学习研究"时，我应该立即切换心态。
+
+  4. 最小有效修改 (Minimal Effective Change)
+
+  | 错误理解              | 正确理解               |
+  |-------------------|--------------------|
+  | ❌ "更好的架构" → 多文件重构 | ✅ "最小修改" → 单文件内部优化 |
+  | ❌ "完善的设计" → 40行代码 | ✅ "解决问题" → 15行代码   |
+  | ❌ "未来扩展性" → 增加抽象层 | ✅ "当前需求" → 直接修复    |
+
+  教训：Bug在Transform → 在Transform内部矢量化修复，不需要移到环境层。
+
+  5. 尊重抽象边界 (Respect Abstraction Boundaries)
+
+  | 错误做法                     | 正确做法                            |
+  |--------------------------|---------------------------------|
+  | ❌ Transform的bug → 改环境层架构 | ✅ Transform的bug → Transform内部修复 |
+  | ❌ 跨越2-6个文件的修改            | ✅ 单文件内部修改                       |
+  | ❌ "这个设计不够完美"             | ✅ "这个bug需要修复"                   |
+
+  教训：抽象边界是为了隔离变化，不是为了追求完美。
+
+  ---
+  实战对比：本次会话的错误与正确方案
+
+  问题1：Steps95ToDoneCounter并行环境bug
+
+  我的错误方案（过度工程化）：
+  修改CppEnvBase添加per-env计数 →
+  修改环境接口传递armed/count →
+  修改Transform读取环境状态 →
+  2-6个文件，~40行代码
+
+  正确方案（最小修改）：
+  # 单文件修改，Transform内部矢量化
+  self._armed = torch.zeros(B, dtype=torch.bool)  # 标量→张量
+  self._count = torch.zeros(B, dtype=torch.int64)
+  # 15行代码
+
+  教训：问题在哪个抽象层，就在那个层内解决。
+
+  问题2：completion_ratio访问
+
+  我的错误方案（过度防御）：
+  try:
+      completion = tensordict[("next", "completion_ratio")]
+  except:
+      for key in possible_keys:
+          try:
+              completion = tensordict.get(key, 0.0)
+          except:
+              pass
+
+  正确方案（确定性访问）：
+  completion = tensordict[("next", "completion_ratio")]  # 直接访问
+
+  教训：分析源码确认行为 > 猜测可能性。
+
+  ---
+  记忆建议
+
+  我建议将以下精简版写入您的CLAUDE.md：
+
+  ## 精准研究代码设计原则
+
+  **核心心态**：科学家（分析-确认-精准修复）而非防御者（假设-保护-优雅降级）
+
+  **五大原则**：
+  1. **基于证据的信任**：分析源码确认deterministic行为，而非防御性猜测
+  2. **确定性优先思维**：追踪数据流确认位置，而非try-except掩盖未知
+  3. **场景适配心态**：研究代码用fail-fast暴露问题，生产系统用fail-safe容错
+  4. **最小有效修改**：在bug所在抽象层修复（单文件15行），而非跨边界重构（多文件40行）
+  5. **尊重抽象边界**：Transform的bug在Transform内修复，不触及环境层
+
+  **金句**：*代码应该像仪器：准确报错比优雅掩盖更有价值。*
+
+  **实例**：
+  - ✅ `tensordict[("next", "completion_ratio")]` # 确定性访问
+  - ❌ `tensordict.get(("next", "completion_ratio"), 0.0)` # 防御性掩盖
+  - ✅ Transform内部矢量化（15行单文件）
+  - ❌ 环境层架构重构（40行多文件）

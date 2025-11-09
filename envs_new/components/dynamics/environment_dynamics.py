@@ -14,9 +14,12 @@
 """
 from __future__ import annotations
 
+from asyncio import current_task
+
 import cv2
 import numpy as np
 from typing import Dict, Tuple, Union, List, Any
+import math
 
 from envs_new.components.config.environment_config import EnvironmentConfig
 from envs_new.components.entity.agent import Agent
@@ -25,6 +28,7 @@ from envs_new.components.dynamics.collision_detector import CollisionDetector
 from envs_new.components.dynamics.action_processor import ActionProcessor
 from envs_new.utils.dependency_sorter import sort_components_by_dependencies
 from envs_new.utils.math_utils import total_variation
+from envs_new.utils.image_utils import extract_ego_patch
 
 
 class Updater:
@@ -66,12 +70,12 @@ class FieldExplorationUpdater(Updater):
         # 使用椭圆桇形模拟机器人视野，将覆盖过的区域设为0（已覆盖）
         if 'field' in maps_dict:
             cv2.ellipse(img=maps_dict['field'],
-                center=agent.position_discrete,  # 椭圆中心：机器人位置
-                axes=(int(agent.vision_length), int(agent.vision_length)),  # 长短轴：视野范围
-                angle=float(agent.direction),  # 旋转角度：机器人朝向
-                startAngle=float(-agent.vision_angle / 2), endAngle=float(agent.vision_angle / 2),  # 扇形起始角和结束角
-                color=(0,),  thickness=-1  # 填充为0（已覆盖，-1表示实心填充
-            )
+                        center=agent.position_discrete,  # 椭圆中心：机器人位置
+                        axes=(int(agent.vision_length), int(agent.vision_length)),  # 长短轴：视野范围
+                        angle=float(agent.direction),  # 旋转角度：机器人朝向
+                        startAngle=float(-agent.vision_angle / 2), endAngle=float(agent.vision_angle / 2),  # 扇形起始角和结束角
+                        color=(0,), thickness=-1  # 填充为0（已覆盖，-1表示实心填充
+                        )
 
             # 记录状态变化
             new_field_area = int(maps_dict['field'].sum())
@@ -96,7 +100,7 @@ class WeedUpdater(Updater):
 
         # 使用凸包填充算法清除机器人覆盖区域内的杂草
         if 'weed' in maps_dict:
-            convex_hull = agent.convex_hull.round().astype(np.int32)
+            convex_hull = agent.extended_convex_hull.round().astype(np.int32)
             cv2.fillPoly(maps_dict['weed'], [convex_hull], color=(0,))  # 0表示清除
 
             # 记录状态变化
@@ -111,20 +115,34 @@ class FieldCoverageUpdater(FieldExplorationUpdater):
     继承自FieldExplorationUpdater，复用setup_state方法
     重写update方法使用机器人本体（凸包）进行覆盖
     """
-    
+
+    def setup_state(self, state: Dict[str, Any], history_length: int = 2) -> None:
+        super().setup_state(state, history_length)
+        # 作为覆盖标签的计数器（避免每步求max），首次覆盖写入1，从0开始自增
+        state['env_state'].set_static_info('coverage_order_next_label', 0)
+
     def update(self, state: Dict[str, Any]) -> None:
         """使用机器人本体覆盖田地（类似除草机制）"""
         maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
-        
+        if 'field' not in maps_dict: return
+
         # 使用凸包填充算法，机器人本体覆盖的区域标记为已覆盖
-        if 'field' in maps_dict:
-            convex_hull = agent.convex_hull.round().astype(np.int32)
-            cv2.fillPoly(maps_dict['field'], [convex_hull], color=(0,))  # 0表示已覆盖
-            
-            # 记录状态变化
-            new_field_area = int(maps_dict['field'].sum())
-            new_field_variation = total_variation(maps_dict['field'].astype(np.int32))
-            env_state.update_state(field_area=new_field_area, field_variation=new_field_variation)
+        convex_hull = agent.extended_convex_hull.round().astype(np.int32)
+        cv2.fillPoly(maps_dict['field'], [convex_hull], color=(0,))  # 0表示已覆盖
+
+        # 记录状态变化
+        new_field_area = int(maps_dict['field'].sum())
+        new_field_variation = total_variation(maps_dict['field'].astype(np.int32))
+        env_state.update_state(field_area=new_field_area, field_variation=new_field_variation)
+
+        if 'original_field' in maps_dict and 'time_series_coveraged_field' in maps_dict:
+            # 覆盖顺序秩标签：为"本步新覆盖"(原始为田地、当前已覆盖、且尚未标记秩)的像素写入递增标签（稳定秩，不随时间重标定）
+            new_coverage_mask = (maps_dict['original_field'] == 1) & (maps_dict['field'] == 0) & (
+                        maps_dict['time_series_coveraged_field'] == 0)
+            if np.any(new_coverage_mask):
+                next_coverage_label = int(env_state.get_static_info('coverage_order_next_label')) + 1
+                maps_dict['time_series_coveraged_field'][new_coverage_mask] = next_coverage_label
+                env_state.set_static_info('coverage_order_next_label', next_coverage_label)
 
 
 class AgentUpdater(Updater):
@@ -152,6 +170,7 @@ class AgentUpdater(Updater):
         if agent_pos_info and len(agent_pos_info) >= 2:
             distance = np.linalg.norm(np.array(agent_pos_info.current) - np.array(agent_pos_info.last))
             env_state.update_state(trajectory_length=env_state.trajectory_length + distance)
+
 
 class MistUpdater(Updater):
     """雾效地图更新器"""
@@ -197,11 +216,11 @@ class WeedTaskStatusUpdater(Updater):
     def setup_state(self, state: Dict[str, Any], history_length: int = 2) -> None:
         """初始化所有状态标志"""
         env_state = state['env_state']
-        
+
         # 从config设置max_steps到static_info（负责timeout检查，所以在这里设置）
         if 'config' in state:
             env_state.set_static_info('max_steps', state['config'].max_episode_steps)
-        
+
         env_state.add_state_info('current_step', history_length, -1)
         env_state.add_state_info('crashed', history_length, False)
         env_state.add_state_info('finished', history_length, False)
@@ -234,6 +253,54 @@ class FieldTaskStatusUpdater(WeedTaskStatusUpdater):
         return state["env_state"].field_area == 0
 
 
+class CoverageOverlapUpdater(Updater):
+    """前沿扫描法：精确记录刀盘扫过的区域
+
+    物理原理：
+    - 割草机重复覆盖 = 前沿刀盘扫过的轨迹（四边形）
+    - 前沿端点：convex_hull的索引[0, 3]（前下角、前上角）
+    - 扫过区域：四边形(P0_prev, P3_prev, P3_curr, P0_curr)
+
+    优势：
+    - 完全精确：无论速度多大都不跳跃或重复计数
+    - 自动适应：自然处理转向、原地打转等特殊情况
+    - 代码简洁：利用StateVariable自动历史管理
+    """
+
+    @classmethod
+    def get_dependencies(cls) -> List[str]:
+        return ['field']
+
+    def setup_state(self, state: Dict[str, Any], history_length: int = 2) -> None:
+        """初始化状态变量"""
+        state['env_state'].add_state_info('overlap_count', history_length, 0)
+
+        # 初始化前沿端点历史（利用StateVariable机制）
+        convex = state['agent'].extended_convex_hull.round().astype(np.int32)
+        initial_front = convex[[0, 3], :]  # shape (2, 2): [[x0,y0], [x3,y3]]
+        state['env_state'].add_state_info('front_points', history_length, initial_front)
+
+    def update(self, state: Dict[str, Any]) -> None:
+        """更新重复覆盖统计"""
+        maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
+
+        current_front = agent.extended_convex_hull.round().astype(np.int32)[[0, 3], :] # 获取当前前沿端点（索引0=前下角, 索引3=前上角）
+        env_state.update_state(front_points=current_front)  # 更新前沿端点历史（必须要在获取前先存入，否则数据可能不足）
+
+        # 获取上一帧前沿端点，构造前沿扫过的四边形（逆时针闭合 P0 前下角 P3 前上角）
+        last_front = env_state.get_info('front_points').last
+        swept_quad = np.array([last_front[0], last_front[1], current_front[1], current_front[0], ], dtype=np.int32)
+
+        # 创建footprint并累加到overlap map
+        agent_footprint = np.zeros_like(maps_dict['overlap'], dtype=np.uint8)
+        cv2.fillPoly(agent_footprint, [swept_quad], color=(1,))
+        maps_dict['overlap'] += agent_footprint.astype(np.int16)
+
+        # 统计重复覆盖：所有≥0的像素和
+        overlap = int(np.maximum(maps_dict['overlap'], 0).sum())
+        env_state.update_state(overlap_count=overlap)
+
+
 class EnvironmentDynamics:
     """
     环境动力学管理器 - 协调所有更新器组件的核心类。
@@ -256,8 +323,7 @@ class EnvironmentDynamics:
     }
 
     def __init__(self, config: EnvironmentConfig, action_processor: ActionProcessor,
-                 enabled_updaters: Union[List[str], Dict[str, bool], None] = None,
-                 history_length: int = 2):
+                 enabled_updaters: Union[List[str], Dict[str, bool], None] = None):
         """
         初始化环境动力学系统
         
@@ -265,12 +331,11 @@ class EnvironmentDynamics:
             config: 环境配置
             action_processor: 动作处理器
             enabled_updaters: 启用的updater组件
-            history_length: 状态历史长度
         """
         self.config = config
         self.action_processor = action_processor
         self.collision_detector = CollisionDetector()
-        self.history_length = history_length
+        self.history_length = config.state_history_length
 
         # 确定启用的updaters
         if enabled_updaters is None:
@@ -289,9 +354,7 @@ class EnvironmentDynamics:
             raise ValueError(f"Unknown updater components: {invalid_components}")
 
         # 使用拓扑排序算法处理组件依赖，确保依赖项先于依赖者执行
-        sorted_components = sort_components_by_dependencies(
-            self.AVAILABLE_UPDATERS, components_to_create
-        )
+        sorted_components = sort_components_by_dependencies(self.AVAILABLE_UPDATERS, components_to_create)
 
         self._updaters = {}
         for name in sorted_components:
@@ -333,13 +396,13 @@ class EnvironmentDynamics:
 
     def reset(self, agent: Agent, maps_dict: Dict[str, np.ndarray], env_state: EnvironmentState) -> None:
         """重置环境动力学"""
+        # 由于现在可以指定obstalce_{id}.png, 可能导致放置于boudingbox长边端点的agent陷入障碍物中，因此在reset进行一次碰撞检测位置修正
+        if self.collision_detector.check_collision(agent, maps_dict):
+            safe_x, safe_y = self.collision_detector.get_safe_position(agent, maps_dict)
+            agent.set_position(safe_x, safe_y)
+
         # 构建统一的state字典
-        state = {
-            'maps_dict': maps_dict,
-            'agent': agent,
-            'env_state': env_state,
-            'config': self.config  # 传递config以供updater使用
-        }
+        state = {'maps_dict': maps_dict, 'agent': agent, 'env_state': env_state,'config': self.config}  # 传递config以供updater使用
 
         # 初始化所有updater的状态（传递state而不是只有env_state）
         for name in self._updaters:

@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
-from typing import Dict, Tuple, Union, Optional, Any
-
+from typing import Dict, List, Tuple, Union, Optional, Any, Callable
 
 from envs_new.components.config.environment_config import EnvironmentConfig
 from envs_new.components.map.map_generator import ScenarioGenerator
@@ -18,7 +17,6 @@ from envs_new.components.dynamics.environment_dynamics import EnvironmentDynamic
 from envs_new.components.dynamics.action_processor import ActionProcessor
 from envs_new.components.reward.reward_system import RewardSystem
 from envs_new.components.render.renderer import Renderer
-
 
 class CppEnvBase(gym.Env):
     """
@@ -35,11 +33,11 @@ class CppEnvBase(gym.Env):
     """
 
     metadata = {
-        "render_modes": ["rgb_array", "first_person"], # 渲染正常图片或者第一人称观测
+        "render_modes": ["rgb_array", "first_person"],  # 渲染正常图片或者第一人称观测
         "render_fps": 50,
     }
 
-    def __init__(self,render_mode: Optional[str] = None, **kwargs):
+    def __init__(self, render_mode: Optional[str] = None, **kwargs):
         super().__init__()
 
         # 极简配置创建：直接使用kwargs
@@ -55,7 +53,7 @@ class CppEnvBase(gym.Env):
 
         # Rendering
         self.is_open = True
-        self.render_mode = render_mode # 目前只支持 rgb_array, human由warpper实现
+        self.render_mode = render_mode  # 目前只支持 rgb_array, human由warpper实现
 
     def _initialize_components(self) -> None:
         """Initialize all environment components."""
@@ -78,14 +76,12 @@ class CppEnvBase(gym.Env):
         self.renderer = Renderer(self.config)
 
     def _get_observation_channels(self) -> int:
-        """
-        获取观察通道数，子类可重写此方法声明自己的通道数
-        
-        Returns:
-            int: 观察地图的通道数
-        """
-        # 基础环境：field, obstacle, weed, (trajectory)
-        return 3 + int(self.config.use_trajectory)
+        """获取预期观察通道数（int），子类可重写此方法声明自己的通道数"""
+        return 3 + int(self.config.use_trajectory) # 基础环境：field, obstacle, weed, (trajectory)
+
+    def _get_expected_vector_length(self) -> int:
+        """预期的observation vector维度，包含当前时间t和完成度c, 以及当前坐标系下的轨迹信息（x, y , steer, speed, der_cos, dre_sin）, 为了不影响除草，设置是否开启的开关，覆盖问题才开启"""
+        return 2 + 6 * self.config.state_history_length if self.config.use_history_vector else 1
 
     def _initialize_spaces(self) -> None:
         """Initialize action and observation spaces."""
@@ -104,19 +100,23 @@ class CppEnvBase(gym.Env):
 
         # 使用声明的通道数而非估算
         actual_channels = self._get_observation_channels()
-        obs_shape = self.observation_generator.get_observation_shape(actual_channels) # 计算观察形状
+        obs_shape = self.observation_generator.get_observation_shape(actual_channels)  # 计算观察形状
 
         self.observation_space = gym.spaces.Dict({
             "observation": gym.spaces.Box(low=0.0, high=1.0, shape=obs_shape, dtype=np.float32),
-            "vector": gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
+            "vector": gym.spaces.Box(low=-1.0, high=1.0, shape=(self._get_expected_vector_length(),), dtype=np.float32),
             "completion_ratio": gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
-        }) # 这里还是叫completion_ratio, 这样在未来除了覆盖任务保持统一性
+        })  # 这里还是叫completion_ratio, 这样在未来除了覆盖任务保持统一性
+
+    def _count_observation_channels(self, obs_maps: Dict[str, Dict[str, Any]]) -> int:
+        """遍历obs_maps，累加每个条目的通道贡献：有 'num_channels' 字段 → 使用该值（复合负载，如HIF的2-3通道）无 'num_channels' 字段 → 默认为1（单通道地图）"""
+        return sum(entry.get('num_channels', 1) for entry in obs_maps.values())
 
     def _update_observation_space(self) -> None:
-        """基于实际地图更新观察空间"""
+        """基于实际地图更新观察空间（精确通道计数）"""
         # 获取实际的观察地图
         obs_maps = self._get_observation_maps()
-        actual_channels = len(obs_maps)
+        actual_channels = self._count_observation_channels(obs_maps)
 
         # 获取正确的观察形状
         obs_shape = self.observation_generator.get_observation_shape(actual_channels)
@@ -124,7 +124,7 @@ class CppEnvBase(gym.Env):
         # 更新观察空间
         self.observation_space = gym.spaces.Dict({
             "observation": gym.spaces.Box(low=0.0, high=1.0, shape=obs_shape, dtype=np.float32),
-            "vector": gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
+            "vector": gym.spaces.Box(low=-1.0, high=1.0, shape=(len(self._get_observation_vector()),), dtype=np.float32), # 基于当前场景的实际向量长度更新vector形状
             "completion_ratio": gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         })
 
@@ -175,18 +175,18 @@ class CppEnvBase(gym.Env):
         info = self._get_step_info()
 
         return observation, float(reward), bool(terminated), bool(truncated), info
-    
+
     def _get_step_info(self) -> Dict[str, Any]:
         """
         Generate info dictionary for step return.
-        Subclasses can override this to return different information.
+        Subclasses can override this to return different information. 需要封装未np.array, 方便并行环境的GymGrapper封装并行化
         """
         return {
-            'crashed': self.env_state.crashed,
-            'finished': self.env_state.finished,
-            'timeout': self.env_state.timeout,
-            'weed_count': self.env_state.weed_count,
-            'weed_ratio': self.env_state.weed_coverage_ratio
+            'crashed': np.array(self.env_state.crashed, dtype=np.bool_),
+            'finished': np.array(self.env_state.finished, dtype=np.bool_),
+            'timeout': np.array(self.env_state.timeout, dtype=np.bool_),
+            'weed_count': np.array(self.env_state.weed_count, dtype=np.float32),
+            'weed_ratio': np.array(self.env_state.weed_coverage_ratio, dtype=np.float32)
         }
 
     def _generate_observation(self) -> Dict[str, np.ndarray]:
@@ -199,7 +199,7 @@ class CppEnvBase(gym.Env):
 
         return {
             'observation': visual_obs,
-            'vector': self._normalize_steering(),
+            'vector': self._get_observation_vector(),
             'completion_ratio': self._get_completion_ratio()
         }
 
@@ -223,7 +223,7 @@ class CppEnvBase(gym.Env):
 
         return obs_maps
 
-    def _normalize_steering(self) -> np.ndarray:
+    def _get_observation_vector(self) -> np.ndarray:
         """归一化转向值"""
         return np.array([self.agent.last_steer / self.config.w_max],
                         dtype=np.float32)
@@ -289,8 +289,6 @@ class CppEnvBase(gym.Env):
     def get_collision_info(self) -> Dict[str, bool]:
         """Get detailed collision information."""
         return self.env_dynamics.get_collision_info(self.agent, self.maps_dict)
-
-
 
 
 if __name__ == "__main__":

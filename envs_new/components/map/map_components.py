@@ -34,18 +34,31 @@ class FieldCreator:
         options = state['options']
         config = state['config']
 
-        # 统一的3元组返回值 - 两种模式都返回 (map, dimensions, field_id)
-        field_map, dimensions, field_id = self._load_from_directory(options['scenario_directory']) if options.get(
-            'scenario_directory') else self._load_from_file(options.get('map_id'), config, rng)
-        
-        # 存储field_id到env_state供其他组件使用 (scenario模式为None)
-        state['env_state'].set_static_info('field_id', field_id)
+        # 在本回合首次确定缩放因子（单一真相），写入 env_state
+        if config.field_scale_enabled:
+            s_min, s_max = tuple(config.field_scale_range)
+            scale = float(rng.uniform(s_min, s_max))
+        else:
+            scale = 1.0
 
-        # 提取几何信息, 并存入maps_dicts
-        bounding_box, field_contours = self._extract_geometry(field_map)
+
+        # 统一的3元组返回值 - 两种模式都返回 (map, dimensions, field_id)
+        field_map, dimensions, field_id = (self._load_from_directory(options['scenario_directory'])
+                                           if options.get('scenario_directory') else
+                                           self._load_from_file(options.get('map_id'), config, rng))
+
+        # 若启用缩放：以图像中心为原点做同心等比仿射缩放（保持画布尺寸不变）
+        if scale != 1.0: field_map = self._scale_binary_map_center(field_map, scale)
+        bounding_box, field_contours = self._extract_geometry(field_map)  # 提取几何信息, 并存入maps_dicts
+
+        # 存储field_id和field_sacle到env_state供其他组件使用 (HFI需要和filed地图匹配)
+        state['env_state'].set_static_info('field_id', field_id)
+        state['env_state'].set_static_info('field_scale', scale)
 
         state['maps_dict']['field'] = field_map
         state['maps_dict']['original_field'] = field_map.copy()
+        state['maps_dict']['time_series_coveraged_field'] = np.zeros_like(field_map, dtype=np.uint32) # 初始化覆盖顺序秩标签图：未覆盖=0，首次覆盖时写入递增标签, 使用无符号整型存储更大范围的标签值
+
         state['env_state'].set_static_info('dimensions', dimensions)
         state['env_state'].set_static_info('bounding_box', bounding_box)
         state['env_state'].set_static_info('field_contours', field_contours)
@@ -97,6 +110,29 @@ class FieldCreator:
         box = box.reshape((-1, 1, 2))
 
         return [box], sorted_contours
+
+    def _scale_binary_map_center(self, binary_map: np.ndarray, scale: float) -> np.ndarray:
+        """以图像中心为原点对二值掩码做同心等比缩放，保持画布尺寸不变。
+
+        使用最近邻插值以确保二值性不被破坏。
+        """
+        if not isinstance(binary_map, np.ndarray) or binary_map.ndim != 2:
+            raise ValueError("binary_map must be a 2D numpy array")
+        if scale <= 0:
+            raise ValueError(f"scale must be positive, got {scale}")
+        if abs(scale - 1.0) < 1e-6:
+            return binary_map
+
+        h, w = binary_map.shape
+        cx, cy = w / 2.0, h / 2.0
+        M = np.array([[scale, 0.0, (1.0 - scale) * cx],
+                      [0.0, scale, (1.0 - scale) * cy]], dtype=np.float32)
+
+        scaled = cv2.warpAffine(binary_map.astype(np.uint8), M, (w, h),
+                                flags=cv2.INTER_NEAREST,
+                                borderMode=cv2.BORDER_CONSTANT,
+                                borderValue=0)
+        return scaled.astype(np.uint8)
 
 
 class AgentCreator:
@@ -151,23 +187,27 @@ class ObstacleCreator:
         return ['field', 'agent']
 
     def generate(self, state: Dict[str, Any], rng: np.random.Generator) -> None:
+        config = state['config']
         scenario_directory = state['options'].get('scenario_directory')
         dimensions = state['env_state'].get_static_info('dimensions')
-        config = state['config']
+        field_id = state['env_state'].get_static_info('field_id')
+        scale = float(state['env_state'].get_static_info('field_scale', 1.0))
+        obstacle_file = Path(config.get_absolute_map_dir()) / 'obstacle' / f'obstacle_{field_id}.png'
 
-        # 判断是否从目录加载
-        if scenario_directory:
+        # 判断加载模式
+        if scenario_directory: # 若指定地址则直接加载
             obstacles = self._load_from_directory(scenario_directory, dimensions)
-        else:
-            obstacles = self._generate_obstacles(
-                dimensions, state['maps_dict']['field'], state['agent'].position, state['agent'].length, config, rng)
-
-        # 边界处理逻辑更清晰
+        elif obstacle_file.exists(): # 若指定field_id对应的obstalce文件存在则加载
+            obstacles = (cv2.imread(str(obstacle_file), cv2.IMREAD_GRAYSCALE) > 0).astype(np.uint8) # 加载预制obstacle
+            if abs(scale - 1.0) > 1e-6: obstacles = self._scale_obstacle_map_center(obstacles, scale) # 处理缩放
+            assert obstacles.shape == (dimensions[1], dimensions[0])
+        else: # 否则随机生成障碍物
+            obstacles = self._generate_obstacles(dimensions, state['maps_dict']['field'], state['agent'].position,
+                                                 state['agent'].length, config, rng)
         if config.use_box_boundary:
             boundary = self._generate_boundary(state['env_state'].get_static_info('dimensions'),
                                                state['env_state'].get_static_info('bounding_box'), config)
             obstacles = np.logical_or(obstacles, boundary).astype(np.uint8)
-
         state['maps_dict']['obstacle'] = obstacles
 
     def _load_from_directory(self, directory: Union[str, Path], dimensions: Tuple[int, int]) -> np.ndarray:
@@ -265,16 +305,30 @@ class ObstacleCreator:
         """计算扩展边界框 - 极简版本"""
         # 直接从顶点获取旋转矩形参数
         center, (width, height), angle = cv2.minAreaRect(box)
-        
+
         # 按配置扩展尺寸，并生成矩形
         expanded_width = max(width * config.boundary_expand_ratio, width + config.boundary_min_expand_pixels)
         expanded_height = max(height * config.boundary_expand_ratio, height + config.boundary_min_expand_pixels)
         expanded_box = cv2.boxPoints(((center), (expanded_width, expanded_height), angle))
-        
+
         # 保持原顺序（左上角开始）
         start_idx = expanded_box.sum(axis=1).argmin()
         expanded_box = np.roll(expanded_box, 4 - start_idx, 0)
         return expanded_box.reshape((-1, 1, 2)).astype(np.int32)
+
+    def _scale_obstacle_map_center(self, obstacle_map: np.ndarray, scale: float) -> np.ndarray:
+        """以图像中心为原点对obstacle地图做同心等比缩放（保持画布尺寸不变）"""
+        h, w = obstacle_map.shape
+        center_x, center_y = w / 2.0, h / 2.0
+
+        # 构建以中心为原点的仿射变换矩阵
+        transform_matrix = np.array([[scale, 0.0, (1.0 - scale) * center_x],
+                                     [0.0, scale, (1.0 - scale) * center_y]], dtype=np.float32)
+
+        # 对二值图使用最近邻插值保持二值特性
+        scaled_map = cv2.warpAffine(obstacle_map.astype(np.uint8),transform_matrix,(w, h),
+            borderMode=cv2.BORDER_CONSTANT,borderValue=0,flags=cv2.INTER_NEAREST)
+        return scaled_map.astype(np.uint8)
 
 
 class WeedCreator:
@@ -443,3 +497,23 @@ class MistCreator:
             cv2.circle(img=maps_dict['mist'], center=agent_position_discrete, radius=radius, color=(1,), thickness=-1)
 
 # HIFCreator已移至envs_new/cpp_env_v5.py作为内部类，提高代码内聚性
+
+
+class OverlapMapCreator:
+    """重复覆盖统计地图组件（overlap map）。
+
+    初始化重复覆盖计数图：
+    - 田地区域置为 -1（允许一次无惩罚覆盖）
+    - 非田地区域置为 0（理想情况下不应覆盖）
+    """
+
+    @classmethod
+    def get_dependencies(cls) -> List[str]:
+        return ['field']
+
+    def generate(self, state: Dict[str, Any], rng: np.random.Generator) -> None:
+        field_map = state['maps_dict']['field']
+        h, w = field_map.shape
+        overlap_map = np.zeros((h, w), dtype=np.int16)
+        overlap_map[field_map == 1] = -1
+        state['maps_dict']['overlap'] = overlap_map

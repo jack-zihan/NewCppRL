@@ -44,30 +44,31 @@ class AsyncEvaluator:
         
         torchrl_logger.info(f"AsyncEvaluator初始化完成，使用ThreadPoolExecutor，max_workers={max_workers}")
     
-    def submit_eval(self, eval_func, model_path: str, cfg: Any, step: int) -> Future:
+    def submit_eval(self, eval_func, model_path: str, cfg: Any, step: int, phase_name: str = None) -> Future:
         """
         提交评估任务
-        
+
         Args:
             eval_func: 评估函数（evaluate_policy_standalone）
             model_path: 模型文件路径
-            cfg: 配置对象
+            cfg: 配置对象（应该是deepcopy的快照）
             step: 训练步数
-            
+            phase_name: 提交时的阶段名（用于过滤不匹配的评估结果）
+
         Returns:
             Future对象，可用于查询任务状态
         """
         # 循环分配进度条position: 1, 2, ..., max_workers, 1, 2, ...
         position = (next(self._position_counter) - 1) % self.max_workers + 1
-        
-        # 提交评估任务到线程池，使用submit
-        future = self.executor.submit(eval_func, model_path, cfg, step, position)
-        
+
+        # 提交评估任务到线程池，使用submit，传递phase_name以便返回时标记
+        future = self.executor.submit(eval_func, model_path, cfg, step, position, phase_name)
+
         # 记录提交信息
         self.submitted_steps.append(step)
         self.pending_results[step] = future
-        
-        torchrl_logger.info(f"提交评估任务: step={step}, position={position}, 当前排队任务数: {len(self.pending_results)}")
+
+        torchrl_logger.info(f"提交评估任务: step={step}, phase={phase_name}, position={position}, 当前排队任务数: {len(self.pending_results)}")
         return future
     
     def get_evaluate_results(self) -> List[Dict[str, Any]]:

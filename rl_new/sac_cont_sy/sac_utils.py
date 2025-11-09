@@ -18,14 +18,131 @@ from tqdm import tqdm
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.record import VideoRecorder
-from rl_new.sac_cont_sy.env_utils import make_environment, make_single_environment, make_drop_pixels_eval_environment
+from rl_new.sac_cont_sy.env_utils import make_single_environment, make_drop_pixels_eval_environment
 from functools import partial
-from torchrl.record import VideoRecorder
-
-import torch
 from pathlib import Path
 from torchrl.record.loggers import CSVLogger
 import shutil
+
+from torchrl_utils.model.resnet_fpn_dual import HIFReconstructionLoss
+
+# ================= Layer 1: Unified Loss & Modes =================
+from enum import Enum
+from typing import Optional
+
+
+class LossMode(Enum):
+    """Training loss composition mode.
+
+    PRETRAIN: only HIF reconstruction (actor forward only)
+    JOINT:    SAC (actor+q+alpha) + HIF with a weight
+    SAC_ONLY: SAC only (used when HIF is disabled)
+    """
+
+    PRETRAIN = "pretrain"
+    JOINT = "joint"
+    SAC_ONLY = "sac_only"
+
+
+class HIFAssistedSACLoss(torch.nn.Module):
+    """Unified loss for SAC with optional HIF assistance.
+
+    This module centralizes loss composition per phase to simplify training code:
+    - PRETRAIN: run actor only and optimize HIF reconstruction; write td_error for PRB
+    - JOINT:    run full SAC + HIF (weighted)
+    - SAC_ONLY: run standard SAC only
+
+    It always returns a TensorDict containing a scalar tensor under key "total_loss"
+    so the update function can consistently backprop on it.
+
+    Args:
+        actor:        the actor module (ProbabilisticActor) used for PRETRAIN forward
+        sac_loss:     TorchRL SACLoss module (produces loss_actor/loss_qvalue/loss_alpha)
+        hif_loss:     HIF reconstruction loss module (optional, required for PRETRAIN/JOINT)
+        mode:         initial LossMode
+        hif_weight:   initial HIF weight (only meaningful for JOINT)
+    """
+
+    def __init__(self,
+                 actor: torch.nn.Module,
+                 sac_loss: torch.nn.Module,
+                 hif_loss: Optional[torch.nn.Module] = None,
+                 mode: LossMode = LossMode.SAC_ONLY,
+                 hif_weight: float = 0.0):
+        super().__init__()
+        self.actor = actor
+        self.sac_loss = sac_loss
+        self.hif_loss = hif_loss
+        self._mode = mode
+        self.hif_weight = float(hif_weight)
+
+        if self._mode in (LossMode.PRETRAIN, LossMode.JOINT) and self.hif_loss is None:
+            raise ValueError(f"LossMode {self._mode.value} requires a valid hif_loss module")
+
+    @property
+    def mode(self) -> LossMode:
+        return self._mode
+
+    def set_mode(self, mode: LossMode, hif_weight: Optional[float] = None):
+        if mode in (LossMode.PRETRAIN, LossMode.JOINT) and self.hif_loss is None:
+            raise ValueError(f"Switching to {mode.value} requires hif_loss")
+        old = self._mode
+        self._mode = mode
+        if hif_weight is not None:
+            self.hif_weight = float(hif_weight)
+        msg = f"[Loss] mode: {old.value} -> {self._mode.value}"
+        if self._mode == LossMode.JOINT:
+            msg += f", hif_weight={self.hif_weight:.4f}"
+        torchrl_logger.info(msg)
+
+    def forward(self, td: TensorDict) -> TensorDict:
+        # PRETRAIN: only run actor and HIF
+        if self._mode == LossMode.PRETRAIN:
+            # run actor to produce predictions (including pred_ego_hif)
+            td = self.actor(td)
+            hif_val, hif_metrics = self.hif_loss(td)
+
+            # write td_error so PRB priority update works during pretrain
+            if "td_error" in hif_metrics.keys():
+                td.set("td_error", hif_metrics["td_error"])  # keep same behavior as HIFPretrainLoss
+
+            out = TensorDict({}, [])
+            out["loss_hif"] = hif_val
+            out["total_loss"] = hif_val
+            # 填充SAC三项loss为0，便于统一日志与均值统计
+            zero = hif_val.new_zeros(())
+            out["loss_actor"] = zero
+            out["loss_qvalue"] = zero
+            out["loss_alpha"] = zero
+            out.update(hif_metrics)
+            return out
+
+        # SAC (and possibly HIF)
+        sac_out = self.sac_loss(td)  # contains loss_actor/loss_qvalue/loss_alpha and alpha/entropy, also writes td_error
+
+        loss_actor = sac_out["loss_actor"]
+        loss_qvalue = sac_out["loss_qvalue"]
+        loss_alpha = sac_out["loss_alpha"]
+
+        out = TensorDict({}, [])
+        out["loss_actor"] = loss_actor
+        out["loss_qvalue"] = loss_qvalue
+        out["loss_alpha"] = loss_alpha
+        if "alpha" in sac_out.keys():
+            out["alpha"] = sac_out["alpha"]
+        if "entropy" in sac_out.keys():
+            out["entropy"] = sac_out["entropy"]
+
+        total = loss_actor + loss_qvalue + loss_alpha
+
+        if self._mode == LossMode.JOINT:
+            hif_val, hif_metrics = self.hif_loss(td)
+            out["loss_hif"] = hif_val
+            out.update(hif_metrics)
+            total = total + self.hif_weight * hif_val
+
+        out["total_loss"] = total
+        return out
 
 
 def dump_video(module, step):
@@ -73,56 +190,55 @@ def generate_exp_name(model_name: str, experiment_name: str) -> str:
 
 
 # ============ 设备配置============
+def _resolve_gpu_devices(gpu_config, train_gpu_id):
+    """解析GPU设备列表（处理-1自动检测和列表验证）"""
+    if gpu_config is None:
+        return []
+
+    if gpu_config == -1:  # 自动检测：使用所有GPU（排除训练GPU）
+        all_gpus = list(range(torch.cuda.device_count()))
+        if train_gpu_id in all_gpus and len(all_gpus) > 1:
+            all_gpus.remove(train_gpu_id)
+
+        if not all_gpus:
+            torchrl_logger.warning("没有可用的GPU用于收集，将使用CPU")
+        elif len(all_gpus) == 1 and all_gpus[0] == train_gpu_id:
+            torchrl_logger.warning(f"只有一个GPU，训练和收集将共享GPU {train_gpu_id}")
+        return all_gpus
+
+    # 验证GPU列表
+    return [gpu_id for gpu_id in gpu_config if gpu_id < torch.cuda.device_count()
+            or torchrl_logger.warning(f"GPU {gpu_id} 不存在，跳过") is None]
+
+
+def _resolve_cpu_workers(cpu_config):
+    """解析CPU工作进程数（处理-1自动检测）"""
+    if cpu_config is None:
+        return 0
+    return max(1, os.cpu_count() - 2) if cpu_config == -1 else cpu_config
+
+
 def setup_devices(cfg):
     """设置训练和收集设备"""
     # 训练设备
-    if cfg.training.device:
-        train_device = torch.device(cfg.training.device)
-    else:
-        train_device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    # 提取训练GPU ID（用于排除）
-    train_gpu_id = int(str(train_device).split(':')[1])
+    train_device = torch.device(cfg.training.device if cfg.training.device
+                                else "cuda:0" if torch.cuda.is_available() else "cpu")
+    train_gpu_id = int(str(train_device).split(':')[1]) if 'cuda' in str(train_device) else None
 
     # 收集设备配置
     collector_devices = []
-    gpu_devices = cfg.collector.gpu_devices
 
-    if gpu_devices is not None:
-        # GPU收集器
-        if gpu_devices == -1:  # 使用所有GPU（除了训练GPU）cudagraph
-            all_gpus = list(range(torch.cuda.device_count()))
-            if train_gpu_id is not None and train_gpu_id in all_gpus and len(all_gpus) > 1:
-                all_gpus.remove(train_gpu_id)  # 排除训练GPU（如果有多个GPU）
-            gpu_devices = all_gpus
-            if not gpu_devices:  # 如果没有可用GPU
-                torchrl_logger.warning("没有可用的GPU用于收集，将使用CPU")
-                gpu_devices = []
-            elif len(gpu_devices) == 1 and gpu_devices[0] == train_gpu_id:
-                torchrl_logger.warning(f"只有一个GPU，训练和收集将共享GPU {train_gpu_id}")
-        elif isinstance(gpu_devices, list):
-            # 验证GPU ID是否有效
-            valid_gpus = []
-            for gpu_id in gpu_devices:
-                if gpu_id < torch.cuda.device_count():
-                    valid_gpus.append(gpu_id)
-                else:
-                    torchrl_logger.warning(f"GPU {gpu_id} 不存在，跳过")
-            gpu_devices = valid_gpus
-
-        processes_per_gpu = cfg.collector.processes_per_gpu
-        for gpu_id in gpu_devices:
-            collector_devices.extend([f'cuda:{gpu_id}'] * processes_per_gpu)
+    # GPU收集器
+    gpu_devices = _resolve_gpu_devices(cfg.collector.gpu_devices, train_gpu_id)
+    for gpu_id in gpu_devices:
+        collector_devices.extend([f'cuda:{gpu_id}'] * cfg.collector.processes_per_gpu)
 
     # CPU收集器
-    cpu_workers = cfg.collector.cpu_workers
-    if cpu_workers is not None:
-        if cpu_workers == -1:  # 最大化CPU使用
-            cpu_workers = max(1, os.cpu_count() - 2)
-        if cpu_workers > 0:
-            collector_devices.extend(['cpu'] * cpu_workers)
+    cpu_workers = _resolve_cpu_workers(cfg.collector.cpu_workers)
+    if cpu_workers > 0:
+        collector_devices.extend(['cpu'] * cpu_workers)
 
-    # 如果没有配置任何设备，使用默认配置
+    # 默认配置
     if not collector_devices:
         collector_devices = ['cpu'] * cfg.collector.num_envs
 
@@ -130,62 +246,97 @@ def setup_devices(cfg):
 
 
 # ============ 优化的更新函数============
-def create_update_fn(loss_module, optimizer, target_net_updater, cfg, compile_mode=None, scaler=None):
-    """创建优化的更新函数，支持编译和cudagraph"""
+def create_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
+                     compile_mode=None, scaler=None):
+    """统一的更新函数 - 极简版
+
+    支持任何符合 TensorDict → TensorDict 接口的 loss 模块:
+    - SACLoss: 标准SAC
+    - HIFAssistedSACLoss: 统一的SAC+HIF（或仅HIF预训练/仅SAC）
+
+    自动组合所有 loss_* 键进行反向传播。
+    """
 
     def update(sampled_tensordict):
-        optimizer.zero_grad(set_to_none=True)
-
-        if cfg.training.use_amp and scaler is not None:  # 混合精度训练 - 使用autocast
-            # 计算损失
+        if cfg.training.use_amp and scaler is not None:
+            # 混合精度训练
             with torch.autocast(device_type='cuda', dtype=torch.float16):
                 loss_out = loss_module(sampled_tensordict)
-                actor_loss, q_loss, alpha_loss = loss_out["loss_actor"], loss_out["loss_qvalue"], loss_out["loss_alpha"]
-                total_loss = (actor_loss + q_loss + alpha_loss).sum()
+                total_loss = loss_out["total_loss"] # Research-grade: explicit contract requires total_loss
+            scaler.scale(total_loss.sum()).backward()
 
-            # 使用GradScaler进行反向传播
-            scaler.scale(total_loss).backward()
-
-            # 梯度裁剪
             if cfg.optim.max_grad_norm:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
 
             scaler.step(optimizer)
             scaler.update()
-        else:  # 标准训练
-            # 计算损失
+            optimizer.zero_grad(set_to_none=True)
+        else:
+            # 标准训练
             loss_out = loss_module(sampled_tensordict)
-            actor_loss, q_loss, alpha_loss = loss_out["loss_actor"], loss_out["loss_qvalue"], loss_out["loss_alpha"]
-            (actor_loss + q_loss + alpha_loss).sum().backward()  # 反向传播
+            total_loss = loss_out["total_loss"]
+            total_loss.sum().backward()
 
-            if cfg.optim.max_grad_norm:  # 梯度裁剪
-                torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
+            if cfg.optim.max_grad_norm:torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
 
             optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
 
-        # 更新目标网络
-        target_net_updater.step()
+        # 更新目标网络（如果有）
+        if target_net_updater is not None:
+            target_net_updater.step()
+
         return loss_out.detach()
 
-    # 编译优化（使用compile_with_warmup）
+    # 编译优化
     if cfg.compile.enable:
         mode = compile_mode if compile_mode is not None else cfg.compile.mode
         warmup = cfg.compile.warmup
         update = compile_with_warmup(update, mode=mode, warmup=warmup)
         torchrl_logger.info(f"启用编译加速，模式: {mode}, warmup: {warmup}")
 
-    # CudaGraph优化（需要PyTorch 2.0+）
+    # CudaGraph优化
     if cfg.compile.cudagraphs and torch.cuda.is_available():
         try:
             update = CudaGraphModule(update, in_keys=[], out_keys=[], warmup=10)
             torchrl_logger.info("启用CudaGraph优化")
             warnings.warn("CudaGraphModule is experimental and may lead to silently wrong results. Use with caution.",
-                          category=UserWarning, )
+                          category=UserWarning)
         except Exception as e:
             torchrl_logger.warning(f"CudaGraph初始化失败: {e}")
-
     return update
+
+
+# ============ Loss组合类（TorchRL风格）============
+
+
+def set_optimizer_group_lrs(optimizer, all_groups_lr=None,
+                           actor_lr=None, critic_lr=None, alpha_lr=None):
+    """设置SAC optimizer学习率（确定性访问，符合研究代码原则）
+
+    直接访问TorchRL CombinedOptimizers的确定结构：[actor, critic, alpha]。
+    配置错误时立即crash，暴露问题而非掩盖（fail-fast原则）。
+
+    Args:
+        optimizer: TorchRL的CombinedOptimizers
+        all_groups_lr: 统一设置所有组的学习率（优先级最高）
+        actor_lr: actor optimizer的学习率
+        critic_lr: critic optimizer的学习率
+        alpha_lr: alpha optimizer的学习率
+    """
+    if all_groups_lr is not None:
+        # 统一设置所有组
+        for g in optimizer.param_groups:
+            g["lr"] = all_groups_lr
+    else:
+        # 分别设置（直接索引访问，配置错误时立即crash）
+        if actor_lr is not None:
+            optimizer.param_groups[0]["lr"] = actor_lr
+        if critic_lr is not None:
+            optimizer.param_groups[1]["lr"] = critic_lr
+        if alpha_lr is not None:
+            optimizer.param_groups[2]["lr"] = alpha_lr
 
 
 # ============ 辅助函数 ============
@@ -279,6 +430,12 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1)
                    else eval_rollout["next", "truncated"])
     episode_rewards = eval_rollout["next", "episode_reward"][episode_end].cpu().numpy()  # RewardSum和StepCounter的输出在"next"中
     episode_lengths = eval_rollout["next", "step_count"][episode_end].cpu().numpy()
+    steps_95_to_done = None
+    if "steps_95_to_done" in eval_rollout["next"].keys():
+        steps_95_to_done = eval_rollout["next", "steps_95_to_done"][episode_end].cpu().numpy()
+    overlap_counts = None
+    if "overlap_count" in eval_rollout["next"].keys(): # overlap_counts 是在wrapper = wrapper.auto_register_info_dict(info_dict_reader=default_info_dict_reader(keys=['overlap_count']))中计算，返回的索引维度不一致，因此需要-1加一维度
+        overlap_counts = eval_rollout["next", "overlap_count"].unsqueeze(-1)[episode_end].cpu().numpy()
 
     # 5. completion_ratio也在"next"的observation中
     completion_ratios = None
@@ -296,6 +453,13 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1)
     if completion_ratios is not None:
         eval_metrics["eval/completion_ratio"] = np.mean(completion_ratios)
         eval_metrics["eval/completion_ratio_max"] = np.max(completion_ratios)
+    if steps_95_to_done is not None:
+        eval_metrics["eval/steps_95_to_done_mean"] = float(np.mean(steps_95_to_done))
+        # 比例：防御性处理 0 长度
+        ratios_95_to_done = steps_95_to_done / np.clip(episode_lengths, 1, None)
+        eval_metrics["eval/ratio_95_to_done_mean"] = float(np.mean(ratios_95_to_done))
+    if overlap_counts is not None:
+        eval_metrics["eval/overlap_count_mean"] = float(np.mean(overlap_counts))
 
     torchrl_logger.info(f"并行评估完成 - 平均奖励: {eval_metrics['eval/reward_mean']:.2f}")
     return eval_metrics
@@ -323,7 +487,16 @@ def log_evaluate_results(results, checkpoint_dir, logger=None):
 
         # 重命名模型文件（加入评估结果）
         old_model_path = checkpoint_dir / f"model_s{result['step']:08d}_eval_pending.pt"
-        new_model_filename = f"model_step{result['step']:08d}_reward{result['reward_mean']:.3f}_completion{result['completion_rate']:.3f}.pt"
+        # 从metrics中提取附加指标用于文件名（可选）
+        metrics_map = result['metrics'] or {}
+        steps_95_to_done_mean = metrics_map.get('eval/steps_95_to_done_mean', None)
+        overlap_count_mean = metrics_map.get('eval/overlap_count_mean', None)
+        filename_suffix = f"_reward{result['reward_mean']:.3f}_completion{result['completion_rate']:.3f}"
+        if steps_95_to_done_mean is not None:
+            filename_suffix += f"_steps95{float(steps_95_to_done_mean):.1f}"
+        if overlap_count_mean is not None:
+            filename_suffix += f"_overlap{float(overlap_count_mean):.0f}"
+        new_model_filename = f"model_step{result['step']:08d}{filename_suffix}.pt"
 
         if old_model_path.exists():
             old_model_path.rename(checkpoint_dir / new_model_filename)
@@ -387,11 +560,8 @@ def is_time_to_evaluate(current_frames, collected_frames, cfg):
     return True if ((crossed and collected_frames >= cfg.collector.init_random_frames) or final) else False
 
 # ============ Checkpoint管理 ============
-import os
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import torch
-from torchrl._utils import logger as torchrl_logger
+
 class CheckpointManager:
     """
     管理Top-N checkpoint保存，基于评估奖励

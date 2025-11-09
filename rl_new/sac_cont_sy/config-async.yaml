@@ -122,6 +122,28 @@ logger:
   eval_video_skip: 100     # 视频跳帧（减小文件大小）
   show_progress: true      # 是否显示评估进度条（需要tqdm）
 
+curriculum:
+  enabled: true
+  s1_consecutive_k: 3  # S1->S2 连续达标次数（完成率≥90%）
+  consecutive_k: 5  # S2->S3 连续稳定次数
+  s2s3_threshold: 0.05  # S2->S3 相对变化阈值（ratio95变化率<5%视为稳定）
+  stages:
+    - name: S1
+      reward_field_group_coef: 1.0
+      reward_turning_group_coef: 0.5
+      reward_overlap_penalty: 0.0
+      sampling_ratio: [0.40, 0.30, 0.30]
+    - name: S2
+      reward_field_group_coef: 0.5
+      reward_turning_group_coef: 0.2
+      reward_overlap_penalty: -0.10
+      sampling_ratio: [0.30, 0.30, 0.40]
+    - name: S3
+      reward_field_group_coef: 0.10
+      reward_turning_group_coef: 0.05
+      reward_overlap_penalty: -0.20
+      sampling_ratio: [0.20, 0.30, 0.50]
+
 # ============ 1.3版本hydra, 提高效率自定义输出地址 ============
 hydra:
   job:

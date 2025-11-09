@@ -35,3 +35,19 @@ dependencies = [
     "cupy-cuda12x",
     "av"
 ]
+
+[tool.pytest.ini_options]
+# 禁用ROS2的所有插件，避免依赖冲突
+addopts = """
+    -p no:launch_testing
+    -p no:launch_testing_ros
+    -p no:ament_pep257
+    -p no:ament_copyright
+    -p no:ament_flake8
+    -p no:ament_lint
+    -p no:ament_xmllint
+"""
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
