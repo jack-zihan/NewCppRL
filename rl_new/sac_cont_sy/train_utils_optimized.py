@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import os
+import time
 import shutil
 import tensordict
+import torch
 import torch.cuda
 from dataclasses import dataclass, replace
 from typing import Optional, Union, Iterator, Tuple, List, Dict
-
+from tensordict import TensorDict
 from omegaconf import DictConfig
 from torchrl._utils import logger as torchrl_logger, timeit
 from torchrl.envs.transforms import MultiStepTransform
@@ -130,7 +132,7 @@ def apply_phase(phase: Phase, cfg: DictConfig, actor_model: torch.nn.Module, dev
         set_optimizer_group_lrs(optimizer, actor_lr=float(cfg.optim.lr_actor), critic_lr=float(cfg.optim.lr_critic),
                                            alpha_lr=float(cfg.optim.lr_alpha))
 
-    if collector is not None: collector.shutdown()
+    if collector is not None: collector.shutdown(timeout=3.0); time.sleep(2.0)
     new_collector = create_collector(cfg, actor_model, device) # 重新创建采集器
 
     torchrl_logger.info(f"[Phase Applied] {phase.name} | "f"Env params: {bool(phase.env_params)} | "f"Sampling: {phase.sampling_ratio}")
@@ -148,7 +150,7 @@ def create_collector(cfg, actor_model, device):
 
 
 def create_replay_buffer(cfg, tmpdir, device, bucketed=False, initial_stage=None):
-    """创建回放缓冲区（含 n-step 和设备转换）"""
+    """创建回放缓冲区（含 n-step 和设备转换，增加了混合精度支持，帮助有效降低缓存，快速验证算法"""
     storage = LazyMemmapStorage(max_size=cfg.buffer.buffer_size,scratch_dir=tmpdir)
 
     if bucketed: # 使用分桶优先级回放缓冲区
@@ -166,8 +168,35 @@ def create_replay_buffer(cfg, tmpdir, device, bucketed=False, initial_stage=None
     if cfg.loss.n_steps > 1: # 添加多步转换
         buffer.append_transform(MultiStepTransform(n_steps=cfg.loss.n_steps, gamma=cfg.loss.gamma,
                                                    reward_keys=["reward"], done_keys=["done", "truncated", "terminated"]))
-    buffer.append_transform(lambda td: td.to(device)) # 设备转换
+    # device_transform = to_device_with_bf16_for_floats if cfg.training.use_amp else to_device
+    # buffer.append_transform(lambda td: device_transform(td, device)) # 设备转换
+
+    buffer.append_transform(lambda td: td.to(device))  # 设备转换
 
     torchrl_logger.info(f"[Buffer] Created - {'Bucketed' if bucketed else 'Standard'} PRB | "
                         f"Size: {cfg.buffer.buffer_size} | Batch: {cfg.buffer.batch_size}")
     return buffer
+
+
+# def to_device(td: TensorDict, device: torch.device) -> TensorDict:
+#     return td.to(device)
+#
+# def to_device_with_bf16_for_floats(td: TensorDict, device: torch.device) -> TensorDict:
+#     """
+#     - 对指定的大浮点键：CPU → GPU + 转为 bfloat16
+#     - 其他键：正常 .to(device)（如果已经在同一 device，会是轻量操作）
+#     """
+#     float_keys = [("observation",), ("next", "observation"), ("label_ego_hif",), ("next", "label_ego_hif"),]
+#
+#     for key in float_keys: # 1) 先对这些“大头浮点键”做一步到位的 device + bf16
+#         if td.get(key, None) is not None:
+#             x = td.get(key)
+#             if torch.is_floating_point(x):
+#                 td.set(key, x.to(device=device, dtype=torch.bfloat16))
+#
+#     # 2) 再把整个 TensorDict 搬到 device：
+#     #    - 对还在 CPU 的键（非浮点 / 未列入 float_keys 的小浮点）做 .to(device)
+#     #    - 对已经在 device 上的键（上面刚 to(device, bf16) 过的）因为 device 相同，基本是 no-op
+#     td = td.to(device)
+#
+#     return td

@@ -35,7 +35,7 @@ buffer:
   batch_size: 2048
   pin_memory: false
   prefetch: 10               # 仅在非分桶回放下生效
-  temp_dir: "~/rl_temp_train_data"
+  temp_dir: "/mnt/data/rl_temp_data"
   shared_memory: True
   bucketed: false            # 关闭分桶：与原 sac.py 对齐
   bucket_capacity_ratio: [0.25, 0.25, 0.50]

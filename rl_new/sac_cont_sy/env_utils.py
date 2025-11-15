@@ -7,7 +7,7 @@ from torchrl.envs import (Compose, DoubleToFloat, EnvBase, EnvCreator, GymWrappe
 from torchrl.envs.gym_like import default_info_dict_reader
 from torchrl.envs.transforms import InitTracker, RewardSum, StepCounter, Transform
 from torchrl.record import VideoRecorder
-
+from torchrl.data import UnboundedContinuous
 
 class PredEgoHIFInjectionEnv(EnvBase):
     """HIF预测注入环境包装（v5/v6可视化）：policy(td)["pred_ego_hif"] → env.maps_dict → render()"""
@@ -17,12 +17,13 @@ class PredEgoHIFInjectionEnv(EnvBase):
         self._env = env
         self._make_spec_from_env()
 
-    def _unwrap_to_method(self, method_name: str):
-        """解包到具有指定方法的环境层"""
-        unwrapped = self._env
-        while hasattr(unwrapped, '_env') and not hasattr(unwrapped, method_name):
-            unwrapped = unwrapped._env
-        return unwrapped
+    def _get_base_env(self):
+        """获取最底层Gymnasium环境"""
+        env = self._env
+        while hasattr(env, '_env'):
+            env = env._env
+            if hasattr(env, 'env'): env = env.env  # GymWrapper
+        return env.unwrapped
 
     def _step(self, tensordict):
         """注入HIF预测到环境（fail-fast访问pred_ego_hif）"""
@@ -33,10 +34,10 @@ class PredEgoHIFInjectionEnv(EnvBase):
         cos_np, sin_np = cos2.detach().cpu().numpy(), sin2.detach().cpu().numpy()
         mag = np.sqrt(sin_np**2 + cos_np**2)
         pred_dict = {'cosine2': cos_np, 'sine2': sin_np, 'confidence': (mag > 0.5).astype(np.float32)}
-        self._unwrap_to_method('set_pred_hif').set_pred_hif(pred_dict)
+        self._get_base_env().set_pred_hif(pred_dict)
 
         tensordict.pop('pred_ego_hif', None)  # 清理避免内存浪费
-        return self._env.step(tensordict)
+        return self._env._step(tensordict)
 
     def _set_seed(self, seed):
         return self._env._set_seed(seed)
@@ -46,12 +47,16 @@ class PredEgoHIFInjectionEnv(EnvBase):
         return self._env.rand_step(tensordict)
 
     def _reset(self, tensordict=None, **kwargs):
-        return self._env.reset(tensordict, **kwargs)
+        return self._env._reset(tensordict, **kwargs)
 
     def _make_spec_from_env(self):
-        """从wrapped env复制specs"""
-        for attr in ['observation_spec', 'action_spec', 'reward_spec', 'done_spec']:
+        # 批量克隆所有spec（包括state_spec）
+        for attr in ['action_spec', 'reward_spec', 'done_spec', 'observation_spec', 'state_spec']:
             setattr(self, attr, getattr(self._env, attr).clone())
+
+        h, w = self.observation_spec["observation"].shape[-2:]
+        self.state_spec["pred_ego_hif"] = UnboundedContinuous(shape=torch.Size([2, h, w]),
+                                                              dtype=torch.float32, device=self.device)
 
 class HIFBidirectionalEnv(EnvBase):
     """双向HIF环境：root写入label_ego_hif [3,H,W]（cos2/sin2/confidence）"""
@@ -67,7 +72,7 @@ class HIFBidirectionalEnv(EnvBase):
         while hasattr(env, '_env'):
             env = env._env
             if hasattr(env, 'env'): env = env.env  # GymWrapper
-        return env
+        return env.unwrapped
 
     def _make_label_hif_tensor(self, label_ego_hif):
         """提取并转换HIF标签为tensor [3,H,W]"""
@@ -75,15 +80,15 @@ class HIFBidirectionalEnv(EnvBase):
                                          label_ego_hif['confidence']], axis=0)).float()
 
     def _step(self, tensordict):
-        label_hif = self._make_label_hif_tensor(self._get_base_env().maps_dict['label_ego_hif'])
-        tensordict["label_ego_hif"] = label_hif.to(dtype=torch.float32, device=self.device)
-        return self._env.step(tensordict)
+        next_tensordict = self._env._step(tensordict)  # 先获取输出
+        next_label_hif = self._make_label_hif_tensor(self._get_base_env().maps_dict['label_ego_hif'])
+        return next_tensordict.set("label_ego_hif", next_label_hif.to(dtype=torch.float32, device=self.device))  # 返回包含label的输出
 
     def _reset(self, tensordict=None, **kwargs):
-        tensordict = self._env.reset(tensordict, **kwargs)
+        tensordict = self._env._reset(tensordict, **kwargs)
         label_hif = self._make_label_hif_tensor(self._get_base_env().maps_dict['label_ego_hif'])
-        tensordict["label_ego_hif"] = label_hif.to(dtype=torch.float32, device=self.device)
-        return tensordict
+        return tensordict.set("label_ego_hif", label_hif.to(dtype=torch.float32, device=self.device))
+
 
     def _set_seed(self, seed):
         return self._env._set_seed(seed)
@@ -93,9 +98,17 @@ class HIFBidirectionalEnv(EnvBase):
         return self._env.rand_step(tensordict)
 
     def _make_spec_from_env(self):
-        """从wrapped env复制specs"""
-        for attr in ['observation_spec', 'action_spec', 'reward_spec', 'done_spec']:
+        """从 wrapped env 复制 specs，并注册 label_ego_hif 到 observation_spec。
+        设计要点：采集器/并行环境会依据 observation_spec 的键集筛选输出； 因此 wrapper 新增的键必须在此处显式声明，否则会被过滤。
+        """
+        # 克隆所有 specs
+        for attr in ['action_spec', 'reward_spec', 'done_spec', 'observation_spec']:
             setattr(self, attr, getattr(self._env, attr).clone())
+
+        # 从 observation 推断空间尺寸并注册 label_ego_hif
+        h, w = self.observation_spec["observation"].shape[-2:]
+        self.observation_spec["label_ego_hif"] = UnboundedContinuous(
+            shape=torch.Size([3, h, w]), dtype=torch.float32, device=self.device)
 
 
 class DropPixels(Transform):

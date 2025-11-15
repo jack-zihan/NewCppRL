@@ -283,14 +283,15 @@ class HIFRenderer(Renderer):
         base = super().render(maps_dict, agent, dimensions, mode, observation_size)
 
         if mode != 'map' or not self.config.render_hif_lines: return base
+        if 'label_ego_hif' not in maps_dict: return base  # 策略：始终渲染双面板（GT | Pred），无 pred 时用黑色占位符确保 observation_spec 恒定  # 无HIF数据，返回基础渲染
 
-        keys_in_order = ("label_ego_hif", "pred_ego_hif")  # 保持输出顺序：GT | Pred
-        panels = [self._overlay_hif_lines(base.copy(), maps_dict[k], maps_dict, agent)
-                  for k in keys_in_order  if k in maps_dict]
+        # 左侧：GT HIF（始终存在）
+        label_panel = self._overlay_hif_lines(base.copy(), maps_dict['label_ego_hif'], maps_dict, agent)
 
-        if not panels: return base # 无HIF数据，返回基础渲染
-        if len(panels) == 1: return panels[0] # 仅一个HIF数据，返回单个渲染
-        return np.hstack(panels) # 拼接多个HIF渲染结果
+        # 右侧：Pred HIF（可能不存在，用占位符填充）
+        pred_panel = np.zeros_like(label_panel)  if 'pred_ego_hif'  not in maps_dict else ( # 黑色占位符
+            self._overlay_hif_lines(base.copy(), maps_dict['pred_ego_hif'], maps_dict, agent)) # 预测HIF
+        return np.hstack([label_panel, pred_panel])  # 始终返回 [H, 2W, 3]
 
     def _overlay_hif_lines(self, image: np.ndarray, hif_dict: Dict[str, np.ndarray],
                           maps_dict: Dict[str, np.ndarray], agent) -> np.ndarray:

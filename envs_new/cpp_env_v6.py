@@ -66,10 +66,13 @@ class CppEnv(CppEnvV5):
         kernel, borderType = self._create_gaussian_kernel(self.config.spatial_spread_sigma), cv2.BORDER_CONSTANT
         for tj_map in ['trajectory_weights', 'trajectory_cos', 'trajectory_sin']:
             self.maps_dict[tj_map] = cv2.filter2D(time_diffused_maps[tj_map], -1, kernel, borderType=borderType)
+        # 权重在2D高斯滤波时候多项极小值卷积可能变负导致不通过Gym观测空间检查，因此添加一个强制阶段的数值保障
+        self.maps_dict['trajectory_weights'] = np.maximum(self.maps_dict['trajectory_weights'], 0.0).astype(np.float32)
 
         # 第三步，cos/sin加权累积值除以权重得到平均方向
         for tj_map in ['trajectory_cos', 'trajectory_sin']:
             self.maps_dict[tj_map] = self.maps_dict[tj_map]  / (self.maps_dict['trajectory_weights'] + 1e-6)
+            self.maps_dict[tj_map][self.maps_dict['trajectory_weights']<1e-6] = 0.0  # 同样去除无效值区域对卷积后数值精度的误差来的方向误差引导
 
     def _get_trajectory_history(self) -> List[Tuple[int, int, float]]:
         """获取历史轨迹数据 [(x, y, direction_deg), ...] 从旧到新排列"""

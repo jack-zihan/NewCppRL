@@ -2,6 +2,8 @@
 优化版SAC课程学习训练脚本 - 集成所有Less is More优化
 现在其实进一步分析出了课程学习的本质，设计了优雅的简洁方案：不论是预训练、课程学习过程，主要影响的在于环境参数的切换和优化目标的切换，
 因此用统一的阶段概念描述每一轮的环境参数和优化目标，形成一个阶段课程表Schedule，按照课程表的环境参数、优化目标往前走即可。Less is More!
+sac_curricuum.py 课程学习，但是课程hif切换的逻辑错误 -> sac_curriculum_optimized.py 课程逻辑正确，但非常混乱复杂 ->
+sac_curriculum_with_pretrain.py 逻辑正确，并且加入了预训练，优化了整体的混乱逻辑 -> sac_utils_optimized_acc_loss.py Less is More的完成了累计梯度的问题
 """
 import os
 import sys
@@ -27,10 +29,10 @@ from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
 from torchrl.record.loggers import get_logger
 
-# 导入优化后的组件
-from rl_new.sac_cont_sy.sac_utils_optimized import (HIFAssistedSACLoss, create_update_fn, evaluate_policy_standalone,
-                                                    generate_exp_name, set_optimizer_group_lrs, setup_torch_cache,
-                                                    log_evaluate_results, is_time_to_evaluate, log_metrics, )
+# 导入优化后的组件（梯度累积版本）
+from rl_new.sac_cont_sy.sac_utils_optimized_acc_loss import (HIFAssistedSACLoss, create_update_fn, evaluate_policy_standalone,
+                                                             generate_exp_name, set_optimizer_group_lrs, setup_torch_cache,
+                                                             log_evaluate_results, is_time_to_evaluate, log_metrics, )
 from rl_new.sac_cont_sy.train_utils_optimized import (create_replay_buffer, create_collector,
                                                       build_training_schedule, ScheduleState, Phase,
                                                       maybe_advance_by_eval, maybe_advance_by_updates, apply_phase)
@@ -65,8 +67,7 @@ def main(cfg: DictConfig):
         torchrl_logger.info(f"训练设备: {train_device}, 收集设备: {collector_device}")
 
         # 设置随机种子
-        torch.manual_seed(cfg.seed);
-        np.random.seed(cfg.seed)
+        torch.manual_seed(cfg.seed); np.random.seed(cfg.seed)
 
         # 设置checkpoint目录
         checkpoint_dir = Path.cwd() / "checkpoints"
@@ -172,7 +173,7 @@ def main(cfg: DictConfig):
         # ============ 6. 主训练循环 ============
         collected_frames = 0 # 帧参数部分
         frames_per_batch = cfg.collector.frames_per_batch
-        num_updates = math.ceil(frames_per_batch / cfg.buffer.batch_size * cfg.loss.utd_ratio)
+        num_updates = math.ceil(frames_per_batch / cfg.buffer.batch_size * cfg.loss.utd_ratio) * cfg.training.grad_accum_steps
 
         collector_iter = iter(collector) # 迭代器部分
         pbar = tqdm.tqdm(total=cfg.collector.total_frames, desc="Training", position=0, leave=True, dynamic_ncols=True)
@@ -187,14 +188,13 @@ def main(cfg: DictConfig):
             if schedule[state.idx].type == 'PRETRAIN':
                 state, adv_upd = maybe_advance_by_updates(state, schedule[state.idx], cfg)
                 if adv_upd: should_transition = True
-            else:
-                # 课程阶段切换判断
-                eval_results = async_evaluator.get_evaluate_results()
-                if eval_results:
-                    log_evaluate_results(eval_results, checkpoint_dir, logger)
-                    state, adv_eval = maybe_advance_by_eval(state, schedule[state.idx], eval_results, cfg, cfg.curriculum.enabled)
-                    if adv_eval: should_transition = True
-                    if current_frames % 300 == 0: should_transition = True
+
+            # 课程阶段切换判断
+            eval_results = async_evaluator.get_evaluate_results()
+            if eval_results:
+                log_evaluate_results(eval_results, checkpoint_dir, logger)
+                state, adv_eval = maybe_advance_by_eval(state, schedule[state.idx], eval_results, cfg, cfg.curriculum.enabled)
+                if adv_eval: should_transition = True
 
             # 执行phase切换
             if should_transition and state.idx + 1 < len(schedule):
@@ -209,6 +209,7 @@ def main(cfg: DictConfig):
             # ========== 数据收集 ==========
             with timeit("collect"):
                 tensordict = next(collector_iter)
+
             current_frames = tensordict.numel()
             collected_frames += current_frames
             pbar.update(current_frames)
@@ -229,11 +230,10 @@ def main(cfg: DictConfig):
                             sampled_td = replay_buffer.sample()
                         with timeit("update"):
                             torch.compiler.cudagraph_mark_step_begin()
-                            loss_td = update_fn(sampled_td)
+                            loss_td, step_taken = update_fn(sampled_td)
                         losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha")
                         replay_buffer.update_tensordict_priority(sampled_td)
-
-                        if schedule[state.idx].type == 'PRETRAIN':
+                        if schedule[state.idx].type == 'PRETRAIN' and step_taken:
                             state = replace(state, pretrain_updates=state.pretrain_updates + 1)
 
                 # Logging
@@ -265,8 +265,7 @@ def main(cfg: DictConfig):
                         metrics_to_log[f"buffer/{k}_size"] = v
 
                 # 提交异步评估任务
-                flag = is_time_to_evaluate(current_frames, collected_frames, cfg)
-                if flag:
+                if is_time_to_evaluate(current_frames, collected_frames, cfg):
                     model_path = (checkpoint_dir / f"model_step{collected_frames:08d}_eval_pending.pt")
                     torch.save({'actor': actor.state_dict(),'critic': critic.state_dict()}, model_path) # 保存为dict格式（与评估端一致）
                     async_evaluator.submit_eval(evaluate_policy_standalone,str(model_path.absolute()),copy.deepcopy(cfg),collected_frames,schedule[state.idx].name)

@@ -82,8 +82,10 @@ class FullUNetHIFDecoder(nn.Module):
             )
 
         self.up54 = nn.ConvTranspose2d(fpn_channels, fpn_channels, 2, stride=2)
-        self.up43 = nn.ConvTranspose2d(fpn_channels, fpn_channels, 2, stride=2)
-        self.up32 = nn.ConvTranspose2d(fpn_channels, fpn_channels, 2, stride=2)
+        # 上一级block输出通道为 decoder_channels，因此后续上采样应从 decoder_channels → fpn_channels
+        self.up43 = nn.ConvTranspose2d(decoder_channels, fpn_channels, 2, stride=2)
+        self.up32 = nn.ConvTranspose2d(decoder_channels, fpn_channels, 2, stride=2)
+
 
         self.b4 = block(fpn_channels * 2, decoder_channels)
         self.b3 = block(fpn_channels * 2, decoder_channels)
@@ -490,7 +492,7 @@ class HIFReconstructionLoss(nn.Module):
         # ⭐ 返回metadata包含td_error（模仿SACLoss返回格式）
         return total, {
             'td_error': per_sample_error.detach(),  # [B] - 用于优先级采样
-            'hif_cosine_loss': float(cos_loss.detach().cpu()),
-            'hif_tv_loss': float(tv.detach().cpu()),
-            'hif_total_loss': float(total.detach().cpu()),
+            'hif_cosine_loss': cos_loss.detach(),
+            'hif_tv_loss': tv.detach(),
+            'hif_total_loss': total.detach(),
         }
