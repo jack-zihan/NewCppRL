@@ -30,9 +30,10 @@ from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
 from torchrl.record.loggers import get_logger
 
 # 导入优化后的组件（梯度累积版本）
-from rl_new.sac_cont_sy.sac_utils_optimized_acc_loss import (HIFAssistedSACLoss, create_update_fn, evaluate_policy_standalone,
-                                                             generate_exp_name, set_optimizer_group_lrs, setup_torch_cache,
-                                                             log_evaluate_results, is_time_to_evaluate, log_metrics, )
+from rl_new.sac_cont_sy.sac_utils_optimized import (HIFAssistedSACLoss, create_update_fn, create_grad_accum_update_fn,
+                                                    evaluate_policy_standalone, generate_exp_name, log_metrics,
+                                                    set_optimizer_group_lrs, setup_torch_cache,
+                                                    log_evaluate_results, is_time_to_evaluate)
 from rl_new.sac_cont_sy.train_utils_optimized import (create_replay_buffer, create_collector,
                                                       build_training_schedule, ScheduleState, Phase,
                                                       maybe_advance_by_eval, maybe_advance_by_updates, apply_phase)

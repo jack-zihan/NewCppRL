@@ -77,6 +77,65 @@ class HIFAssistedSACLoss(torch.nn.Module):
             out["total_loss"] = total
             return out
 
+def create_grad_accum_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
+                     compile_mode=None, scaler=None):
+    """创建更新函数（支持compile/cudagraph/AMP/梯度累积，适配SACLoss和HIFAssistedSACLoss）"""
+    torch._dynamo.config.capture_scalar_outputs = True
+    # 梯度累积配置
+    grad_accum_steps = cfg.training.get('grad_accum_steps', 1)
+    acc_counter = [0]  # 使用列表作为闭包可变变量
+
+    def update(sampled_tensordict):
+        step_taken = False
+
+        # AMP训练路径
+        if cfg.training.use_amp and scaler:
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                loss_out = loss_module(sampled_tensordict)
+            scaler.scale(loss_out["total_loss"].sum() / grad_accum_steps).backward()
+
+            acc_counter[0] += 1
+            if acc_counter[0] % grad_accum_steps == 0:
+                if cfg.optim.max_grad_norm:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                if target_net_updater: target_net_updater.step()
+                step_taken = True
+
+        else:  # 标准训练路径
+            loss_out = loss_module(sampled_tensordict)
+            (loss_out["total_loss"].sum() / grad_accum_steps).backward()
+
+            acc_counter[0] += 1
+            if acc_counter[0] % grad_accum_steps == 0:
+                if cfg.optim.max_grad_norm:
+                    torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                if target_net_updater: target_net_updater.step()
+                step_taken = True
+
+        return loss_out.detach(), step_taken
+
+    # Compile优化
+    if cfg.compile.enable:
+        mode = compile_mode or cfg.compile.mode
+        update = compile_with_warmup(update, mode=mode, warmup=cfg.compile.warmup)
+        torchrl_logger.info(f"[Compile] 模式: {mode}, warmup: {cfg.compile.warmup}")
+
+    # CudaGraph优化
+    if cfg.compile.cudagraphs and torch.cuda.is_available():
+        try:
+            update = CudaGraphModule(update, in_keys=[], out_keys=[], warmup=10)
+            torchrl_logger.info("[CudaGraph] 已启用")
+            warnings.warn("CudaGraphModule is experimental, use with caution.", UserWarning)
+        except Exception as e:
+            torchrl_logger.warning(f"[CudaGraph] 初始化失败: {e}")
+
+    return update
 
 # def create_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
 #                      compile_mode=None, scaler=None):
