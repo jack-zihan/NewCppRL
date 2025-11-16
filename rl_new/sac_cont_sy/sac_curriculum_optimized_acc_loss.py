@@ -110,7 +110,8 @@ def main(cfg: DictConfig):
         # ============ 3. 创建模型 ============
         if cfg.hif.enabled:
             actor, critic = make_sac_resnet_dual_models(env=make_train_environment(cfg, device="cpu"),
-                                                        device=train_device, hif_decoder_type=cfg.hif.decoder_type)
+                                                        device=train_device, hif_decoder_type=cfg.hif.decoder_type,
+                                                        backbone_type=cfg.hif.backbone,)
         else:
             actor, critic = make_sac_models(env=make_train_environment(cfg, device="cpu"), device=train_device)
 
@@ -158,8 +159,8 @@ def main(cfg: DictConfig):
         weight_provider = lambda: schedule[state.idx].hif_weight
         unified_loss = HIFAssistedSACLoss(actor=actor, sac_loss=loss_module, hif_loss=hif_loss,cfg=cfg,
                                           phase_provider=phase_provider, weight_provider=weight_provider)
-        # 创建更新函数
-        update_fn = create_update_fn(unified_loss, optimizer, target_net_updater, cfg, compile_mode, scaler)
+        # 创建梯度累积更新函数
+        update_fn = create_grad_accum_update_fn(unified_loss, optimizer, target_net_updater, cfg, compile_mode, scaler)
 
         # 根据首阶段设置学习率（PRETRAIN 统一lr，否则恢复三组lr）
         if schedule[0].type == 'PRETRAIN':

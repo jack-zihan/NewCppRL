@@ -48,13 +48,23 @@ class ScheduleState:
 def build_training_schedule(cfg: DictConfig) -> List[Phase]:
     """构建线性训练课程表：[PRETRAIN?] + 课程阶段序列"""
     def _env_params(stage_cfg):
-        return {
+        env_params = {
             'reward_field_group_coef': float(stage_cfg.reward_field_group_coef),
             'reward_turning_group_coef': float(stage_cfg.reward_turning_group_coef),
             'reward_overlap_penalty': float(stage_cfg.reward_overlap_penalty),
             'overlap_tolerance': float(stage_cfg.overlap_tolerance),
             'field_scale_enabled': bool(stage_cfg.field_scale_enabled),
-            'field_scale_range': (float(stage_cfg.field_scale_range[0]), float(stage_cfg.field_scale_range[1])),}
+            'field_scale_range': (float(stage_cfg.field_scale_range[0]), float(stage_cfg.field_scale_range[1])),
+        }
+
+        # 可选课程参数：仅当在stage配置中显式给出时才覆盖环境默认值
+        if "num_obstacles_range" in stage_cfg:
+            env_params["num_obstacles_range"] = (
+                int(stage_cfg.num_obstacles_range[0]),
+                int(stage_cfg.num_obstacles_range[1]),
+            )
+
+        return env_params
 
     def _create_phase(stage_cfg) -> Phase:
         name = str(stage_cfg.name)

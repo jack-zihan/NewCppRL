@@ -184,7 +184,8 @@ class ResNetFPNDualHeadActor(nn.Module):
         hidden_dim: int = 512,
         pretrained: bool = True,
         hif_decoder_type: str = 'two_stage',
-        decoder_channels: int = 128
+        decoder_channels: int = 128,
+        backbone_type: str = "resnet34",
     ):
         super().__init__()
 
@@ -193,7 +194,8 @@ class ResNetFPNDualHeadActor(nn.Module):
             in_channels=in_channels,
             fpn_channels=fpn_channels,
             pretrained=pretrained,
-            use_groupnorm=True
+            use_groupnorm=True,
+            backbone_type=backbone_type,
         )
 
         # Action head
@@ -283,7 +285,8 @@ class ResNetFPNCritic(nn.Module):
         action_dim: int = 2,
         fpn_channels: int = 256,
         hidden_dim: int = 512,
-        pretrained: bool = True
+        pretrained: bool = True,
+        backbone_type: str = "resnet34",
     ):
         super().__init__()
 
@@ -292,7 +295,8 @@ class ResNetFPNCritic(nn.Module):
             in_channels=in_channels,
             fpn_channels=fpn_channels,
             pretrained=pretrained,
-            use_groupnorm=True
+            use_groupnorm=True,
+            backbone_type=backbone_type,
         )
 
         # Q-value head (similar to action head but includes action in input)

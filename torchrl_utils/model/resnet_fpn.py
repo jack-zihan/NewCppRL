@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from torchvision.models import ResNet34_Weights
+from torchvision.models import ResNet18_Weights
 from typing import Dict, List, Tuple, Optional
 
 
@@ -116,7 +117,7 @@ class ResNet34Backbone(nn.Module):
             x: Input tensor [B, C, 96, 96]
 
         Returns:
-            Tuple of (C2, C3, C4, C5) features at different scales
+            Tuple of (C2, C3, C4, C5) features at different scales.
         """
         # Stem
         x = self.conv1(x)  # [B, 64, 96, 96] (no downsampling due to stride=1)
@@ -125,10 +126,102 @@ class ResNet34Backbone(nn.Module):
         x = self.maxpool(x)  # [B, 64, 48, 48]
 
         # ResNet stages
-        c2 = self.layer1(x)  # [B, 64, 48, 48] - Note: effectively stride 2 due to maxpool
+        c2 = self.layer1(x)  # [B, 64, 48, 48]
         c3 = self.layer2(c2)  # [B, 128, 24, 24]
         c4 = self.layer3(c3)  # [B, 256, 12, 12]
         c5 = self.layer4(c4)  # [B, 512, 6, 6]
+
+        return c2, c3, c4, c5
+
+
+class ResNet18Backbone(nn.Module):
+    """ResNet18 backbone adapted for multi-channel BEV input.
+
+    与 ResNet34Backbone 保持相同接口与行为，仅使用 ResNet18 以控制模型深度与参数量。
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 5,
+        pretrained: bool = True,
+        freeze_bn: bool = False,
+        replace_stride_with_dilation: Optional[List[bool]] = None,
+    ) -> None:
+        super().__init__()
+
+        if pretrained:
+            resnet = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        else:
+            resnet = models.resnet18(weights=None)
+
+        self.conv1 = self._adapt_first_conv(resnet.conv1, in_channels, pretrained)
+        self.bn1 = resnet.bn1
+        self.relu = resnet.relu
+        self.maxpool = resnet.maxpool
+
+        self.layer1 = resnet.layer1
+        self.layer2 = resnet.layer2
+        self.layer3 = resnet.layer3
+        self.layer4 = resnet.layer4
+
+        if freeze_bn:
+            self._freeze_bn()
+
+    def _adapt_first_conv(
+        self,
+        conv_layer: nn.Conv2d,
+        in_channels: int,
+        pretrained: bool,
+    ) -> nn.Conv2d:
+        """Adapt pretrained 3-channel conv to multi-channel input."""
+        new_conv = nn.Conv2d(
+            in_channels,
+            conv_layer.out_channels,
+            kernel_size=conv_layer.kernel_size,
+            stride=1,
+            padding=conv_layer.padding,
+            bias=conv_layer.bias is not None,
+        )
+
+        if pretrained and in_channels != 3:
+            with torch.no_grad():
+                pretrained_weight = conv_layer.weight.data
+                repeats = (in_channels + 2) // 3
+                repeated = pretrained_weight.repeat(1, repeats, 1, 1)
+                adapted = repeated[:, :in_channels, :, :]
+                adapted *= (3.0 / in_channels) ** 0.5
+                new_conv.weight.data = adapted
+                if conv_layer.bias is not None:
+                    new_conv.bias.data = conv_layer.bias.data.clone()
+        elif pretrained:
+            new_conv.weight.data = conv_layer.weight.data.clone()
+            if conv_layer.bias is not None:
+                new_conv.bias.data = conv_layer.bias.data.clone()
+
+        return new_conv
+
+    def _freeze_bn(self) -> None:
+        """Freeze BatchNorm layers to keep ImageNet statistics stable."""
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
+                for param in m.parameters():
+                    param.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        """Forward pass returning intermediate features for FPN.
+
+        返回与 ResNet34Backbone 相同形状的 C2–C5 特征，方便 FPN 复用。
+        """
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        c2 = self.layer1(x)
+        c3 = self.layer2(c2)
+        c4 = self.layer3(c3)
+        c5 = self.layer4(c4)
 
         return c2, c3, c4, c5
 
@@ -224,15 +317,33 @@ class ResNetFPNEncoder(nn.Module):
         fpn_channels: int = 256,
         pretrained: bool = True,
         freeze_bn: bool = False,
-        use_groupnorm: bool = True
+        use_groupnorm: bool = True,
+        backbone_type: str = "resnet34",
     ):
         super().__init__()
 
-        self.backbone = ResNet34Backbone(in_channels, pretrained, freeze_bn)
+        if backbone_type == "resnet18":
+            backbone_module = ResNet18Backbone(
+                in_channels=in_channels,
+                pretrained=pretrained,
+                freeze_bn=freeze_bn,
+            )
+        elif backbone_type == "resnet34":
+            backbone_module = ResNet34Backbone(
+                in_channels=in_channels,
+                pretrained=pretrained,
+                freeze_bn=freeze_bn,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported backbone_type: {backbone_type}. Expected 'resnet18' or 'resnet34'."
+            )
+
+        self.backbone = backbone_module
         self.fpn = FeaturePyramidNetwork(
             in_channels_list=[64, 128, 256, 512],
             out_channels=fpn_channels,
-            use_groupnorm=use_groupnorm
+            use_groupnorm=use_groupnorm,
         )
 
         self.fpn_channels = fpn_channels

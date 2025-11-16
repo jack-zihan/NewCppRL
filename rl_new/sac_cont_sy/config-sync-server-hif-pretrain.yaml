@@ -1,7 +1,5 @@
 # SAC 同步训练（带 HIF 预训练）配置
 
-pretrained_model: null
-seed: 42
 in_server: False
 
 env:
@@ -27,11 +25,12 @@ collector:
 training:
   device: cuda:0
   use_amp: true #True
+  grad_accum_steps: 4
   total_updates: 1_000_000
 
 buffer:
   buffer_size: 250_000
-  batch_size: 2 # 512 #2048
+  batch_size: 256 # 512 #2048
   pin_memory: false
   prefetch: 10
   temp_dir: "/mnt/data/rl_temp_data"
@@ -66,6 +65,7 @@ loss:
   alpha_init: 1.0
 
 hif:
+  backbone: "resnet18"  # 可选: "resnet18" 或 "resnet34"
   # 预训练阶段（新增，全部为必填）
   pretrain:
     enabled: true
@@ -97,7 +97,7 @@ hif:
   vis_interval: 1000
 
 compile:
-  enable: true
+  enable: false
   mode: "default"
   warmup: 8
   cudagraphs: false

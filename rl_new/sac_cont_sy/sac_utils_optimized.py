@@ -137,76 +137,40 @@ def create_grad_accum_update_fn(loss_module, optimizer, target_net_updater=None,
 
     return update
 
-# def create_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
-#                      compile_mode=None, scaler=None):
-#     """创建更新函数（支持compile/cudagraph/AMP，适配SACLoss和HIFAssistedSACLoss）"""
-#
-#     def update(sampled_tensordict):
-#         # AMP训练路径
-#         if cfg.training.use_amp and scaler:
-#             with torch.autocast(device_type='cuda', dtype=torch.float16):
-#                 loss_out = loss_module(sampled_tensordict)
-#             scaler.scale(loss_out["total_loss"].sum()).backward()
-#             if cfg.optim.max_grad_norm:
-#                 scaler.unscale_(optimizer)
-#                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
-#             scaler.step(optimizer)
-#             scaler.update()
-#             optimizer.zero_grad(set_to_none=True)
-#         else:  # 标准训练路径
-#             loss_out = loss_module(sampled_tensordict)
-#             loss_out["total_loss"].sum().backward()
-#             if cfg.optim.max_grad_norm:
-#                 torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
-#             optimizer.step()
-#             optimizer.zero_grad(set_to_none=True)
-#
-#         if target_net_updater: target_net_updater.step() # # 更新目标网络
-#         return loss_out.detach()
-#
-#     # Compile优化
-#     if cfg.compile.enable:
-#         mode = compile_mode or cfg.compile.mode
-#         update = compile_with_warmup(update, mode=mode, warmup=cfg.compile.warmup)
-#         torchrl_logger.info(f"[Compile] 模式: {mode}, warmup: {cfg.compile.warmup}")
-#
-#     # CudaGraph优化
-#     if cfg.compile.cudagraphs and torch.cuda.is_available():
-#         try:
-#             update = CudaGraphModule(update, in_keys=[], out_keys=[], warmup=10)
-#             torchrl_logger.info("[CudaGraph] 已启用")
-#             warnings.warn("CudaGraphModule is experimental, use with caution.", UserWarning)
-#         except Exception as e:
-#             torchrl_logger.warning(f"[CudaGraph] 初始化失败: {e}")
-#
-#     return update
-
 def create_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
                      compile_mode=None, scaler=None):
-    """创建更新函数（支持 compile / CudaGraph / BF16 AMP，适配 SACLoss 和 HIFAssistedSACLoss）"""
+    """创建更新函数（支持compile/cudagraph/AMP，适配SACLoss和HIFAssistedSACLoss）"""
 
     def update(sampled_tensordict):
-        if cfg.training.use_amp: # ====== BF16 AMP 路径 ======
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        # AMP训练路径
+        if cfg.training.use_amp and scaler:
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
                 loss_out = loss_module(sampled_tensordict)
-        else:
-            loss_out = loss_module(sampled_tensordict) # # 回退到标准 FP32 路径
+            scaler.scale(loss_out["total_loss"].sum()).backward()
+            if cfg.optim.max_grad_norm:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+        else:  # 标准训练路径
+            loss_out = loss_module(sampled_tensordict)
+            loss_out["total_loss"].sum().backward()
+            if cfg.optim.max_grad_norm:
+                torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
 
-        loss_out["total_loss"].sum().backward()
-        if cfg.optim.max_grad_norm:
-            torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        if target_net_updater: target_net_updater.step()  # 更新目标网络
+        if target_net_updater: target_net_updater.step() # # 更新目标网络
         return loss_out.detach()
 
-    # ====== Compile 优化 ======
+    # Compile优化
     if cfg.compile.enable:
         mode = compile_mode or cfg.compile.mode
         update = compile_with_warmup(update, mode=mode, warmup=cfg.compile.warmup)
         torchrl_logger.info(f"[Compile] 模式: {mode}, warmup: {cfg.compile.warmup}")
 
-    # ====== CudaGraph 优化（如果你之后想保留）======
+    # CudaGraph优化
     if cfg.compile.cudagraphs and torch.cuda.is_available():
         try:
             update = CudaGraphModule(update, in_keys=[], out_keys=[], warmup=10)
@@ -216,6 +180,43 @@ def create_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
             torchrl_logger.warning(f"[CudaGraph] 初始化失败: {e}")
 
     return update
+
+# def create_update_fn(loss_module, optimizer, target_net_updater=None, cfg=None,
+#                      compile_mode=None, scaler=None):
+#     """ 目前该函数有问题，只转换了数据的BF16, 但遇到ResNet的BatchNorm2D的时候会因为模型中的FP32出问题，暂时弃用
+#     创建更新函数（支持 compile / CudaGraph / BF16 AMP，适配 SACLoss 和 HIFAssistedSACLoss）"""
+#
+#     def update(sampled_tensordict):
+#         if cfg.training.use_amp: # ====== BF16 AMP 路径 ======
+#             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+#                 loss_out = loss_module(sampled_tensordict)
+#         else:
+#             loss_out = loss_module(sampled_tensordict) # # 回退到标准 FP32 路径
+#
+#         loss_out["total_loss"].sum().backward()
+#         if cfg.optim.max_grad_norm:
+#             torch.nn.utils.clip_grad_norm_(loss_module.parameters(), cfg.optim.max_grad_norm)
+#         optimizer.step()
+#         optimizer.zero_grad(set_to_none=True)
+#         if target_net_updater: target_net_updater.step()  # 更新目标网络
+#         return loss_out.detach()
+#
+#     # ====== Compile 优化 ======
+#     if cfg.compile.enable:
+#         mode = compile_mode or cfg.compile.mode
+#         update = compile_with_warmup(update, mode=mode, warmup=cfg.compile.warmup)
+#         torchrl_logger.info(f"[Compile] 模式: {mode}, warmup: {cfg.compile.warmup}")
+#
+#     # ====== CudaGraph 优化（如果你之后想保留）======
+#     if cfg.compile.cudagraphs and torch.cuda.is_available():
+#         try:
+#             update = CudaGraphModule(update, in_keys=[], out_keys=[], warmup=10)
+#             torchrl_logger.info("[CudaGraph] 已启用")
+#             warnings.warn("CudaGraphModule is experimental, use with caution.", UserWarning)
+#         except Exception as e:
+#             torchrl_logger.warning(f"[CudaGraph] 初始化失败: {e}")
+#
+#     return update
 
 
 def set_optimizer_group_lrs(optimizer, all_groups_lr=None,
@@ -283,9 +284,16 @@ def evaluate_policy_standalone(model_path, cfg, step, position=1, phase_name=Non
 
     # 加载模型
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-    actor, _ = make_sac_resnet_dual_models(env=make_single_environment(cfg, device='cpu'),
-                device='cpu', hif_decoder_type=cfg.hif.decoder_type) if cfg.hif.enabled else \
-                make_sac_models(env=make_single_environment(cfg, device='cpu'), device='cpu')
+    if cfg.hif.enabled:
+        backbone_type = getattr(cfg.hif, "backbone", "resnet34")
+        actor, _ = make_sac_resnet_dual_models(
+            env=make_single_environment(cfg, device="cpu"),
+            device="cpu",
+            hif_decoder_type=cfg.hif.decoder_type,
+            backbone_type=backbone_type,
+        )
+    else:
+        actor, _ = make_sac_models(env=make_single_environment(cfg, device="cpu"), device="cpu")
     actor.load_state_dict(checkpoint['actor'])
     actor.eval()
 

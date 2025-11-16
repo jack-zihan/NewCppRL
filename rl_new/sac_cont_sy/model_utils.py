@@ -89,7 +89,8 @@ def make_sac_models(env, device="cpu"):
     return policy_module, qvalue_module
 
 
-def make_sac_resnet_dual_models(env, device="cpu", hif_decoder_type="two_stage"):
+def make_sac_resnet_dual_models(env, device: str = "cpu", hif_decoder_type: str = "two_stage",
+                               backbone_type: str = "resnet18"):
     """创建ResNet-FPN SAC模型（Actor同时输出action和HIF预测）
 
     返回两个独立模块：
@@ -109,7 +110,7 @@ def make_sac_resnet_dual_models(env, device="cpu", hif_decoder_type="two_stage")
     actor_net = ResNetFPNDualHeadActor(
         in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim,
         fpn_channels=256, hidden_dim=512, pretrained=True,
-        hif_decoder_type=hif_decoder_type, decoder_channels=128
+        hif_decoder_type=hif_decoder_type, decoder_channels=128, backbone_type=backbone_type,
     ).to(device)
 
     # 双输出包装器 → 参数提取器 → ProbabilisticActor
@@ -133,10 +134,8 @@ def make_sac_resnet_dual_models(env, device="cpu", hif_decoder_type="two_stage")
     )
 
     # Critic网络：独立的ResNet-FPN编码器
-    critic_net = ResNetFPNCritic(
-        in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim,
-        fpn_channels=256, hidden_dim=512, pretrained=True
-    ).to(device)
+    critic_net = ResNetFPNCritic(in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim, fpn_channels=256,
+        hidden_dim=512, pretrained=True, backbone_type=backbone_type,).to(device)
 
     critic = ValueOperator(in_keys=["observation", "vector", "action"], module=critic_net)
 
