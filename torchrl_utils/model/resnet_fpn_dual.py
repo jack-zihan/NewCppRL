@@ -183,6 +183,7 @@ class ResNetFPNDualHeadActor(nn.Module):
         fpn_channels: int = 256,
         hidden_dim: int = 512,
         pretrained: bool = True,
+        enable_hif: bool = True,
         hif_decoder_type: str = 'two_stage',
         decoder_channels: int = 128,
         backbone_type: str = "resnet34",
@@ -207,23 +208,16 @@ class ResNetFPNDualHeadActor(nn.Module):
             output_loc_scale=True
         )
 
-        # HIF decoder head
-        if hif_decoder_type == 'two_stage':
-            self.hif_decoder = TwoStageHIFDecoder(
+        # 条件创建HIF decoder（节省20-50MB显存）
+        self.hif_decoder = None
+        if enable_hif:
+            decoder_class = TwoStageHIFDecoder if hif_decoder_type == 'two_stage' else FullUNetHIFDecoder
+            self.hif_decoder = decoder_class(
                 fpn_channels=fpn_channels,
                 decoder_channels=decoder_channels,
                 output_channels=2,
                 use_groupnorm=True,
             )
-        elif hif_decoder_type == 'full':
-            self.hif_decoder = FullUNetHIFDecoder(
-                fpn_channels=fpn_channels,
-                decoder_channels=decoder_channels,
-                output_channels=2,
-                use_groupnorm=True,
-            )
-        else:
-            raise ValueError(f"Unknown decoder type: {hif_decoder_type}")
 
         self.hif_decoder_type = hif_decoder_type
 
@@ -254,6 +248,12 @@ class ResNetFPNDualHeadActor(nn.Module):
         # HIF prediction (optional)
         hif_pred = None
         if return_hif:
+            # Fail-fast检查：确保decoder已初始化
+            if self.hif_decoder is None:
+                raise RuntimeError(
+                    "HIF decoder未初始化！请在创建模型时设置enable_hif=True"
+                )
+
             if self.hif_decoder_type == 'two_stage':
                 # Two-stage decoder uses P2 and P3
                 # Note: P2 is 48×48, not 96×96 due to maxpool in ResNet

@@ -29,17 +29,29 @@ def _prepare_env_specs(env, device):
     return input_shape, action_spec, vec_dim, action_dim
 
 
-class DualOutputActorWrapper(nn.Module):
-    """双输出Actor包装器：同时返回action_params和pred_ego_hif [B,2,H,W]
-    注：必须在模块顶层定义以支持多进程采集器的pickling"""
+class ActorWrapper(nn.Module):
+    """Actor输出格式转换器：tuple → dict
 
-    def __init__(self, actor_net):
+    将ResNetFPNDualHeadActor的tuple输出转换为TorchRL要求的dict格式。
+    根据HIF启用状态决定输出键数量。
+
+    Args:
+        actor_net: ResNetFPNDualHeadActor实例
+        enable_hif: HIF功能开关，为True时输出包含pred_ego_hif键
+
+    注：必须在模块顶层定义以支持多进程采集器的pickling
+    """
+    def __init__(self, actor_net, enable_hif: bool):
         super().__init__()
         self.actor_net = actor_net
+        self.enable_hif = enable_hif
 
     def forward(self, observation, vector):
-        action_params, pred_ego_hif = self.actor_net(observation, vector, return_hif=True)
-        return {"action_params": action_params, "pred_ego_hif": pred_ego_hif}
+        action_params, hif_pred = self.actor_net(observation, vector, return_hif=self.enable_hif)
+        return {
+            "action_params": action_params,
+            **({"pred_ego_hif": hif_pred} if self.enable_hif else {})
+        }
 
 
 def make_sac_models(env, device="cpu"):
@@ -89,35 +101,38 @@ def make_sac_models(env, device="cpu"):
     return policy_module, qvalue_module
 
 
-def make_sac_resnet_dual_models(env, device: str = "cpu", hif_decoder_type: str = "two_stage",
-                               backbone_type: str = "resnet18"):
-    """创建ResNet-FPN SAC模型（Actor同时输出action和HIF预测）
+def make_sac_resnet_dual_models(env, device: str = "cpu", enable_hif: bool = True,
+                               hif_decoder_type: str = "two_stage", backbone_type: str = "resnet18"):
+    """创建ResNet-FPN SAC模型（支持可选的HIF输出）
 
     返回两个独立模块：
-    1. Actor：ProbabilisticActor，同时输出action和pred_ego_hif
+    1. Actor：ProbabilisticActor，根据enable_hif决定是否输出pred_ego_hif
     2. Critic：ValueOperator，独立编码器
 
     Args:
         env: TorchRL环境实例
         device: 目标设备（默认"cpu"）
+        enable_hif: HIF功能开关，决定decoder初始化和输出键（默认True）
         hif_decoder_type: HIF解码器类型（"two_stage"或"full"）
+        backbone_type: ResNet骨干网络类型（默认"resnet18"）
     """
     # 准备环境规格
     input_shape, action_spec, vec_dim, action_dim = _prepare_env_specs(env, device)
     in_channels = input_shape[0]
 
-    # Actor网络：ResNet-FPN编码器 + 双头（action + HIF）
+    # Actor网络：ResNet-FPN编码器 + 条件HIF decoder
     actor_net = ResNetFPNDualHeadActor(
         in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim,
         fpn_channels=256, hidden_dim=512, pretrained=True,
-        hif_decoder_type=hif_decoder_type, decoder_channels=128, backbone_type=backbone_type,
+        enable_hif=enable_hif, hif_decoder_type=hif_decoder_type,
+        decoder_channels=128, backbone_type=backbone_type,
     ).to(device)
 
-    # 双输出包装器 → 参数提取器 → ProbabilisticActor
+    # Actor包装器 → 参数提取器 → ProbabilisticActor
     actor_base = TensorDictModule(
-        DualOutputActorWrapper(actor_net),
+        ActorWrapper(actor_net, enable_hif=enable_hif),
         in_keys=["observation", "vector"],
-        out_keys=["action_params", "pred_ego_hif"]
+        out_keys=["action_params", "pred_ego_hif"] if enable_hif else ["action_params"]
     )
 
     param_module = TensorDictModule(

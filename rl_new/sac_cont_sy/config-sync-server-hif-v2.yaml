@@ -5,6 +5,10 @@ pretrained_model: null
 seed: 42
 in_server: False
 
+model:
+  architecture: "resnet"
+  backbone: "resnet18"
+
 env:
   env_id: "NewPasture-v2"
   env_kwargs:
@@ -78,7 +82,6 @@ loss:
 
 # 关闭 HIF 及预训练（保留完整结构，避免运行时错误）
 hif:
-  backbone: "resnet34"
   enabled: false
   decoder_type: "full"
   initial_weight: 0.0

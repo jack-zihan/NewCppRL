@@ -108,10 +108,11 @@ def main(cfg: DictConfig):
         async_evaluator = AsyncEvaluator(max_workers=cfg.logger.eval_worker)
 
         # ============ 3. 创建模型 ============
-        if cfg.hif.enabled:
+        if cfg.model.architecture == "resnet":
             actor, critic = make_sac_resnet_dual_models(env=make_train_environment(cfg, device="cpu"),
-                                                        device=train_device, hif_decoder_type=cfg.hif.decoder_type,
-                                                        backbone_type=cfg.hif.backbone,)
+                                                        device=train_device, enable_hif=cfg.hif.enabled,
+                                                        hif_decoder_type=cfg.hif.decoder_type,
+                                                        backbone_type=cfg.model.backbone,)
         else:
             actor, critic = make_sac_models(env=make_train_environment(cfg, device="cpu"), device=train_device)
 

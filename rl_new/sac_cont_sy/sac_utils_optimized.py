@@ -284,13 +284,13 @@ def evaluate_policy_standalone(model_path, cfg, step, position=1, phase_name=Non
 
     # 加载模型
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-    if cfg.hif.enabled:
-        backbone_type = getattr(cfg.hif, "backbone", "resnet34")
+    if cfg.model.architecture == "resnet":
         actor, _ = make_sac_resnet_dual_models(
             env=make_single_environment(cfg, device="cpu"),
             device="cpu",
+            enable_hif=cfg.hif.enabled,
             hif_decoder_type=cfg.hif.decoder_type,
-            backbone_type=backbone_type,
+            backbone_type=cfg.model.backbone,
         )
     else:
         actor, _ = make_sac_models(env=make_single_environment(cfg, device="cpu"), device="cpu")

@@ -2,6 +2,10 @@
 
 in_server: False
 
+model:
+  architecture: "resnet"
+  backbone: "resnet34"
+
 env:
   env_id: "NewPasture-v6"  # 预训练默认在v6（HIF引导但不直接观测），也可改为v5
   env_kwargs:
@@ -65,7 +69,6 @@ loss:
   alpha_init: 1.0
 
 hif:
-  backbone: "resnet18"  # 可选: "resnet18" 或 "resnet34"
   # 预训练阶段（新增，全部为必填）
   pretrain:
     enabled: true
