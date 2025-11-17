@@ -118,7 +118,7 @@ def create_grad_accum_update_fn(loss_module, optimizer, target_net_updater=None,
                 if target_net_updater: target_net_updater.step()
                 step_taken = True
 
-        return loss_out.detach(), step_taken
+        return loss_out.detach().to("cpu"), step_taken
 
     # Compile优化
     if cfg.compile.enable:
@@ -239,7 +239,7 @@ def evaluate_policy(actor_critic, cfg, logger, step, position: int = 1):
     _, eval_env = make_drop_pixels_eval_environment(cfg, logger, eval_device=torch.device('cpu'))
 
     # 确定性rollout
-    with set_exploration_type(ExplorationType.DETERMINISTIC):
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
         pbar = tqdm(total=cfg.logger.eval_max_steps + 2, desc=f"Eval step={step}",
                    disable=not cfg.logger.show_progress, position=position, leave=False, dynamic_ncols=True)
         eval_rollout = eval_env.rollout(

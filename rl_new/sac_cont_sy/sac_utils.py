@@ -408,7 +408,7 @@ def evaluate_policy_parallel(actor_critic, cfg, logger, step, position: int = 1)
     _, eval_env = make_drop_pixels_eval_environment(cfg, logger, eval_device=torch.device('cpu'))
 
     # 2. 执行rollout - 使用break_when_all_done确保所有环境完成
-    with set_exploration_type(ExplorationType.DETERMINISTIC):
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
         # 创建进度条（使用传入的position，评估完成后自动清除,+2使得StepCounter有效）
         pbar = tqdm(total=cfg.logger.eval_max_steps+2, desc=f"Eval step={step}", disable=not cfg.logger.show_progress,
                     position=position, leave=False, dynamic_ncols=True)  # 使用传入的position, 评估完成后自动清除, 适应终端宽度
@@ -660,7 +660,7 @@ def evaluate_policy(actor_critic, cfg, train_device, logger, step):
             fps=6)  # 关键：启用内存映射，避免显存/内存溢出, 制作2x2网格视频 # 2列网格, 不跳帧（评估时已经通过eval_video_skip控制）, # 视频帧率
 
     # 3. 进行各种数据和组件初始化
-    with set_exploration_type(ExplorationType.DETERMINISTIC):
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
         # 初始化环境和收集所有transitions
         tds = []
         all_transitions = []

@@ -18,6 +18,8 @@ from cpu_apf import cpu_apf_bool
 import cupy as cp
 from envs_new.utils.gpu_apf import gpu_apf_bool
 
+from envs_new.components.map.map_components import OverlapMapCreator
+from envs_new.components.dynamics import CoverageOverlapUpdater
 
 class APFCalculator(RewardCalculator):
     """基于APF势场变化的奖励计算器"""
@@ -79,9 +81,13 @@ class CppEnv(CppEnvBase):
         super().__init__(render_mode=render_mode, **{**v2_configs, **kwargs})
         if self.config.use_apf: self.reward_system.add_calculator("apf", APFCalculator)  # 注册APF奖励计算器
 
+        self.scenario_generator.add_component('overlap', OverlapMapCreator())
+        self.env_dynamics.add_updater('coverage_overlap', CoverageOverlapUpdater())
+
     def _get_observation_channels(self) -> int:
-        """v2环境的观察通道数：field, mist_inv, obstacle, weed, (trajectory)"""
-        return 4 + int(self.config.use_trajectory)
+        """v2环境的观察通道数：field, mist_inv, obstacle, weed, (trajectory)
+        11月17日加上了overlap, time_series_coveraged_field"""
+        return 4 + int(self.config.use_trajectory) + 2
 
     def get_discounted_apf(self, binary_map: np.ndarray, propagate_distance: int,
                            eps: Optional[float] = None, pad: bool = False) -> np.ndarray:
@@ -154,6 +160,16 @@ class CppEnv(CppEnvBase):
         }
         if self.config.use_trajectory:
             obs_maps['trajectory'] = {'map': obs_trajectory, 'pad': 0.0}
+
+        # 重复覆盖热图：归一化到[0,1]，上限由overlap_tolerance控制（对应当前阶段的冗余预算R*）
+        normalized_overlap = (np.clip(self.maps_dict['overlap'] + 1, 0, self.config.overlap_tolerance + 1)
+                              / (self.config.overlap_tolerance + 1))  # 当观测=1.0时，表示该区域已达到奖励breakeven阈值
+        obs_maps['overlap'] = {'map': normalized_overlap.astype(np.float32), 'pad': 0.0}
+
+        # 覆盖顺序秩通道（稳定秩）：rank = order_label / total_field_area，未覆盖=0
+        normalized_order_map = (self.maps_dict['time_series_coveraged_field'].astype(np.float32) /
+                                float(int(self.env_state.total_field_area))).astype(np.float32)
+        obs_maps['time_series_coveraged_field'] = {'map': normalized_order_map, 'pad': 0.0}
 
         return obs_maps
 

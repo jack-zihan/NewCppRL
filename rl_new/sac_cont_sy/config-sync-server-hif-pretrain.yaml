@@ -1,10 +1,12 @@
 # SAC 同步训练（带 HIF 预训练）配置
 
 in_server: False
+pretrained_model: "/root/NewCppRL/rl_new/sac_cont_sy/outputs/HIF_v6/2025-11-17/00-52-27/checkpoints/model_step00150000_eval_pending.pt" #null
+seed: 42
 
 model:
   architecture: "resnet"
-  backbone: "resnet34"
+  backbone: "resnet18"
 
 env:
   env_id: "NewPasture-v6"  # 预训练默认在v6（HIF引导但不直接观测），也可改为v5
@@ -21,14 +23,14 @@ env:
 collector:
   total_frames: 4_000_000
   frames_per_batch: 20
-  init_random_frames: 60 #50_000
+  init_random_frames: 200 #50_000
   env_per_collector: 1
   num_collectors: 16 #32
   pin_memory: true
 
 training:
   device: cuda:0
-  use_amp: true #True
+  use_amp: false #True
   grad_accum_steps: 4
   total_updates: 1_000_000
 
@@ -71,7 +73,7 @@ loss:
 hif:
   # 预训练阶段（新增，全部为必填）
   pretrain:
-    enabled: true
+    enabled: false
     min_buffer_frames: 20 #16384       # 至少积累这么多帧后开始预训练
     max_updates: 2 #10000             # 仅HIF更新的总步数
     actor_lr: 3.0e-4               # 预训练期间的学习率（覆盖所有param group或至少actor组）
@@ -113,7 +115,7 @@ logger:
   exp_name: HIF_v6
   model_name: ContinuousSAC
   eval_worker: 1
-  eval_interval: 50_000
+  eval_interval: 100 #50_000
   eval_episodes: 4
   eval_max_steps: 5000
   eval_video: true

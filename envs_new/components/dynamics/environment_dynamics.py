@@ -63,6 +63,8 @@ class FieldExplorationUpdater(Updater):
         state['env_state'].add_state_info('field_area', history_length, initial_area)
         state['env_state'].add_state_info('field_variation', history_length, initial_tv)
 
+        state['env_state'].set_static_info('coverage_order_next_label', 0)
+
     def update(self, state: Dict[str, Any]) -> None:
         """更新田地地图并记录状态变化"""
         maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
@@ -81,6 +83,15 @@ class FieldExplorationUpdater(Updater):
             new_field_area = int(maps_dict['field'].sum())
             new_field_variation = total_variation(maps_dict['field'].astype(np.int32))
             env_state.update_state(field_area=new_field_area, field_variation=new_field_variation)
+
+            if 'original_field' in maps_dict and 'time_series_coveraged_field' in maps_dict:
+                # 覆盖顺序秩标签：为"本步新覆盖"(原始为田地、当前已覆盖、且尚未标记秩)的像素写入递增标签（稳定秩，不随时间重标定）
+                new_coverage_mask = (maps_dict['original_field'] == 1) & (maps_dict['field'] == 0) & (
+                        maps_dict['time_series_coveraged_field'] == 0)
+                if np.any(new_coverage_mask):
+                    next_coverage_label = int(env_state.get_static_info('coverage_order_next_label')) + 1
+                    maps_dict['time_series_coveraged_field'][new_coverage_mask] = next_coverage_label
+                    env_state.set_static_info('coverage_order_next_label', next_coverage_label)
 
 
 class WeedUpdater(Updater):
@@ -115,11 +126,6 @@ class FieldCoverageUpdater(FieldExplorationUpdater):
     继承自FieldExplorationUpdater，复用setup_state方法
     重写update方法使用机器人本体（凸包）进行覆盖
     """
-
-    def setup_state(self, state: Dict[str, Any], history_length: int = 2) -> None:
-        super().setup_state(state, history_length)
-        # 作为覆盖标签的计数器（避免每步求max），首次覆盖写入1，从0开始自增
-        state['env_state'].set_static_info('coverage_order_next_label', 0)
 
     def update(self, state: Dict[str, Any]) -> None:
         """使用机器人本体覆盖田地（类似除草机制）"""

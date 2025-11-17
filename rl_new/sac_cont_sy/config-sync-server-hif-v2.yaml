@@ -31,7 +31,7 @@ env:
     use_mist: true
 
 collector:
-  total_frames: 4_000_000
+  total_frames: 10_000_000
   frames_per_batch: 20
   init_random_frames: 50_000
   env_per_collector: 1
@@ -121,7 +121,7 @@ logger:
   backend: wandb
   project_name: SAC_2025
   group_name: Weed
-  exp_name: Weed_v2_Repro_from_Optimized
+  exp_name: Weed_v2_Optimized
   model_name: ContinuousSAC
   eval_worker: 1
   eval_interval: 50_000

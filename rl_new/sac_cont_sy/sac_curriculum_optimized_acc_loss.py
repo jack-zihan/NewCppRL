@@ -234,7 +234,7 @@ def main(cfg: DictConfig):
                         with timeit("update"):
                             torch.compiler.cudagraph_mark_step_begin()
                             loss_td, step_taken = update_fn(sampled_td)
-                        losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha")
+                        losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha").detach().to("cpu")
                         replay_buffer.update_tensordict_priority(sampled_td)
                         if schedule[state.idx].type == 'PRETRAIN' and step_taken:
                             state = replace(state, pretrain_updates=state.pretrain_updates + 1)
@@ -281,7 +281,7 @@ def main(cfg: DictConfig):
                     log_metrics(logger, metrics_to_log, collected_frames)
 
                 collector.update_policy_weights_() # collector的policy权重同步
-
+            del sampled_td, loss_td # 清理内存
         # ============ 9. 训练结束 ============
         torchrl_logger.info(f"Training took {time.time() - start_time:.2f} seconds to finish")
         pbar.close()
