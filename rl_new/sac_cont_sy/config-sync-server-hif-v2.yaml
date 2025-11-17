@@ -6,7 +6,7 @@ seed: 42
 in_server: False
 
 model:
-  architecture: "resnet"
+  architecture: "cnn" # "resnet"
   backbone: "resnet18"
 
 env:
@@ -17,6 +17,8 @@ env:
     reward_turning_group_coef: 0.0
     reward_overlap_penalty: 0.0
     overlap_tolerance: 1.0
+#    map_dir: "envs_new/maps/indoor_coverage"
+    map_dir: "envs_new/maps/weed_coverage"
 
     # 课程学习参数（与 curriculum.stages[0] 保持一致）
     field_scale_enabled: false
@@ -119,7 +121,7 @@ compile:
 logger:
   mode: online
   backend: wandb
-  project_name: SAC_2025
+  project_name: SAC_2025_Weed
   group_name: Weed
   exp_name: Weed_v2_Optimized
   model_name: ContinuousSAC
@@ -143,23 +145,23 @@ curriculum:
     - name: S1  # 第一阶段：完全复刻原 sac.py 行为（奖励与障碍物范围均与 env_kwargs 对齐）
       reward_field_group_coef: 0.125
       reward_turning_group_coef: 0.0
-      reward_overlap_penalty: 0.0
+      reward_overlap_penalty: 0.5
       overlap_tolerance: 1.0
       sampling_ratio: [0.34, 0.33, 0.33]  # 修复：添加采样比例（均匀采样）
       field_scale_enabled: false
       field_scale_range: [1.0, 1.0]
-      num_obstacles_range: [0, 8]
+      num_obstacles_range: [0,8] #[0, 8]
       # 不显式指定 num_obstacles_range，沿用 env_kwargs 中的 [5,8]
 
     - name: S2  # 第二阶段：奖励保持不变，仅将障碍物数量范围收紧为[6,8]
       reward_field_group_coef: 0.125
       reward_turning_group_coef: 0.0
-      reward_overlap_penalty: 0.0
+      reward_overlap_penalty: 0.5
       overlap_tolerance: 1.0
       sampling_ratio: [0.34, 0.33, 0.33]
       field_scale_enabled: false
       field_scale_range: [1.0, 1.0]
-      num_obstacles_range: [5, 8]
+      num_obstacles_range: [5,8]
 
 hydra:
   job:

@@ -62,7 +62,8 @@ def make_sac_models(env, device="cpu"):
     # CNN架构配置
     in_keys = ["observation", "vector"]
     encoder_out_dim = 512
-    cnn_channels, kernel_sizes, strides = (64, 128, 256), (3, 3, 3), (1, 1, 1)
+    # cnn_channels, kernel_sizes, strides = (64, 128, 256), (3, 3, 3), (1, 1, 1)
+    cnn_channels, kernel_sizes, strides = (32, 64, 64), (3, 3, 3), (1, 1, 1)
 
     # Policy网络：CNN编码器 + MLP头部 → (loc, scale)
     policy_net = DeepQNet(

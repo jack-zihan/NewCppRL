@@ -47,7 +47,7 @@ torch.set_float32_matmul_precision("high")
 tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 
 
-@hydra.main(version_base="1.1", config_path="", config_name="config-sync-server-hif-pretrain")
+@hydra.main(version_base="1.1", config_path="", config_name="config-sync-server-hif-v2")
 def main(cfg: DictConfig):
     # ============ 1. 临时实验目录和基础设置 ============
     temp_dir = cfg.buffer.temp_dir
@@ -90,6 +90,7 @@ def main(cfg: DictConfig):
         # 将首阶段的环境参数注入（PRETRAIN 已复制下一阶段参数）
         if schedule[0].env_params:
             cfg.env.env_kwargs.update(schedule[0].env_params)
+            torchrl_logger.info(f"学习环境数据: {cfg.env.env_kwargs.map_dir} , 障碍 {cfg.env.env_kwargs.num_obstacles_range}")
 
         # ============ 2. 创建Logger & 异步评估器 ============
         logger = None
@@ -281,7 +282,8 @@ def main(cfg: DictConfig):
                     log_metrics(logger, metrics_to_log, collected_frames)
 
                 collector.update_policy_weights_() # collector的policy权重同步
-            del sampled_td, loss_td # 清理内存
+                del sampled_td, loss_td # 清理内存
+            del tensordict # 清理内存
         # ============ 9. 训练结束 ============
         torchrl_logger.info(f"Training took {time.time() - start_time:.2f} seconds to finish")
         pbar.close()

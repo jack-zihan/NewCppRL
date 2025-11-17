@@ -76,18 +76,22 @@ class CppEnv(CppEnvBase):
     def __init__(self, render_mode="rgb_array", **kwargs): # 目前只支持 rgb_array, human由warpper实现
         """初始化v2环境，配置APF特性"""
         # v2核心特性：apf观察和奖励, 一定要有mist
-        v2_configs = {'reward_apf': 1.0, 'use_apf': True, 'use_trajectory': True, 'use_mist': True, 'render_mist': True}
+        v2_configs = {'reward_apf': 1.0, 'use_apf': True, 'use_trajectory': True, 'use_mist': True, 'render_mist': True,
+                      # "state_size":(768, 768),  "state_downsize":(768, 768), "multiscale_feature_size":96,
+                      }
 
         super().__init__(render_mode=render_mode, **{**v2_configs, **kwargs})
         if self.config.use_apf: self.reward_system.add_calculator("apf", APFCalculator)  # 注册APF奖励计算器
-
-        self.scenario_generator.add_component('overlap', OverlapMapCreator())
-        self.env_dynamics.add_updater('coverage_overlap', CoverageOverlapUpdater())
+        #
+        # self.scenario_generator.add_component('overlap', OverlapMapCreator())
+        # self.env_dynamics.add_updater('coverage_overlap', CoverageOverlapUpdater())
 
     def _get_observation_channels(self) -> int:
         """v2环境的观察通道数：field, mist_inv, obstacle, weed, (trajectory)
         11月17日加上了overlap, time_series_coveraged_field"""
-        return 4 + int(self.config.use_trajectory) + 2
+        # return 4 + int(self.config.use_trajectory) + 2
+
+        return 4 + int(self.config.use_trajectory)
 
     def get_discounted_apf(self, binary_map: np.ndarray, propagate_distance: int,
                            eps: Optional[float] = None, pad: bool = False) -> np.ndarray:
@@ -161,15 +165,15 @@ class CppEnv(CppEnvBase):
         if self.config.use_trajectory:
             obs_maps['trajectory'] = {'map': obs_trajectory, 'pad': 0.0}
 
-        # 重复覆盖热图：归一化到[0,1]，上限由overlap_tolerance控制（对应当前阶段的冗余预算R*）
-        normalized_overlap = (np.clip(self.maps_dict['overlap'] + 1, 0, self.config.overlap_tolerance + 1)
-                              / (self.config.overlap_tolerance + 1))  # 当观测=1.0时，表示该区域已达到奖励breakeven阈值
-        obs_maps['overlap'] = {'map': normalized_overlap.astype(np.float32), 'pad': 0.0}
-
-        # 覆盖顺序秩通道（稳定秩）：rank = order_label / total_field_area，未覆盖=0
-        normalized_order_map = (self.maps_dict['time_series_coveraged_field'].astype(np.float32) /
-                                float(int(self.env_state.total_field_area))).astype(np.float32)
-        obs_maps['time_series_coveraged_field'] = {'map': normalized_order_map, 'pad': 0.0}
+        # # 重复覆盖热图：归一化到[0,1]，上限由overlap_tolerance控制（对应当前阶段的冗余预算R*）
+        # normalized_overlap = (np.clip(self.maps_dict['overlap'] + 1, 0, self.config.overlap_tolerance + 1)
+        #                       / (self.config.overlap_tolerance + 1))  # 当观测=1.0时，表示该区域已达到奖励breakeven阈值
+        # obs_maps['overlap'] = {'map': normalized_overlap.astype(np.float32), 'pad': 0.0}
+        #
+        # # 覆盖顺序秩通道（稳定秩）：rank = order_label / total_field_area，未覆盖=0
+        # normalized_order_map = (self.maps_dict['time_series_coveraged_field'].astype(np.float32) /
+        #                         float(int(self.env_state.total_field_area))).astype(np.float32)
+        # obs_maps['time_series_coveraged_field'] = {'map': normalized_order_map, 'pad': 0.0}
 
         return obs_maps
 
