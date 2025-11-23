@@ -19,6 +19,7 @@ env:
     overlap_tolerance: 1.0
 #    map_dir: "envs_new/maps/indoor_coverage"
     map_dir: "envs_new/maps/weed_coverage"
+#    use_box_boundary: False
 
     # 课程学习参数（与 curriculum.stages[0] 保持一致）
     field_scale_enabled: false
@@ -31,6 +32,12 @@ env:
     use_apf: true
     use_trajectory: true
     use_mist: true
+
+    state_size: [256, 256]
+    state_downsize: [256, 256]
+    multiscale_feature_size: 32
+
+
 
 collector:
   total_frames: 10_000_000
@@ -50,8 +57,8 @@ buffer:
   buffer_size: 500_000
   batch_size: 2048
   pin_memory: false
-  prefetch: 10               # 仅在非分桶回放下生效
-  temp_dir: "/mnt/data/rl_temp_data"
+  prefetch: 2 #10               # 仅在非分桶回放下生效
+  temp_dir: "/root/rl_temp_data"
   shared_memory: True
   bucketed: false            # 关闭分桶：与原 sac.py 对齐
   bucket_capacity_ratio: [0.25, 0.25, 0.50]
@@ -145,23 +152,23 @@ curriculum:
     - name: S1  # 第一阶段：完全复刻原 sac.py 行为（奖励与障碍物范围均与 env_kwargs 对齐）
       reward_field_group_coef: 0.125
       reward_turning_group_coef: 0.0
-      reward_overlap_penalty: 0.5
-      overlap_tolerance: 1.0
+      reward_overlap_penalty: 0.1
+      overlap_tolerance: 5.0
       sampling_ratio: [0.34, 0.33, 0.33]  # 修复：添加采样比例（均匀采样）
       field_scale_enabled: false
       field_scale_range: [1.0, 1.0]
-      num_obstacles_range: [0,8] #[0, 8]
+      num_obstacles_range: [0,8] #[0,8] #[0, 8]
       # 不显式指定 num_obstacles_range，沿用 env_kwargs 中的 [5,8]
 
     - name: S2  # 第二阶段：奖励保持不变，仅将障碍物数量范围收紧为[6,8]
       reward_field_group_coef: 0.125
       reward_turning_group_coef: 0.0
-      reward_overlap_penalty: 0.5
-      overlap_tolerance: 1.0
+      reward_overlap_penalty: 0.15
+      overlap_tolerance: 5.0
       sampling_ratio: [0.34, 0.33, 0.33]
       field_scale_enabled: false
       field_scale_range: [1.0, 1.0]
-      num_obstacles_range: [5,8]
+      num_obstacles_range: [5,8] #[5,8]
 
 hydra:
   job:

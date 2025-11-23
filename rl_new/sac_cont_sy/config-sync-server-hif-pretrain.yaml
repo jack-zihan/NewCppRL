@@ -23,7 +23,7 @@ env:
 collector:
   total_frames: 4_000_000
   frames_per_batch: 20
-  init_random_frames: 200 #50_000
+  init_random_frames: 50_000
   env_per_collector: 1
   num_collectors: 16 #32
   pin_memory: true
@@ -115,7 +115,7 @@ logger:
   exp_name: HIF_v6
   model_name: ContinuousSAC
   eval_worker: 1
-  eval_interval: 100 #50_000
+  eval_interval: 50_000
   eval_episodes: 4
   eval_max_steps: 5000
   eval_video: true

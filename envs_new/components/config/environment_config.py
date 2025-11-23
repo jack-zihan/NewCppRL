@@ -28,7 +28,7 @@ class EnvironmentConfig:
     use_trajectory: bool = True
     use_mist: bool = True
     use_apf: bool = True
-    apf_interpolate: bool = False  # APF场值双线性插值开关（使用连续坐标而非离散网格）
+    apf_interpolate: bool = False #True  # APF场值双线性插值开关（使用连续坐标而非离散网格）
     ensure_field_visibility: bool = True
     exclude_weeds_near_obstacles: bool = True
 

@@ -238,7 +238,7 @@ def make_train_eval_environment(cfg, logger=None, train_device="cpu", eval_devic
     trsf_clone = train_env.transform.clone()
     if cfg.logger.eval_video:
         trsf_clone.insert(0, VideoRecorder(logger, tag="rendering/test", in_keys=["pixels"],
-                                           make_grid=True, skip=cfg.logger.eval_video_skip))
+                                           make_grid=True, skip=int(cfg.logger.eval_video_skip)))
     return train_env, TransformedEnv(eval_parallel, trsf_clone)
 
 def make_train_environment(cfg, device="cpu"):
@@ -278,7 +278,7 @@ def make_drop_pixels_eval_environment(cfg, logger=None, eval_device="cpu"):
     if cfg.logger.eval_video and logger is not None:
         trsf.insert(0, KeepLastPixels())
         trsf.insert(1, VideoRecorder(logger=logger, tag="eval/video", in_keys=["pixels"],
-                                     make_grid=True, skip=cfg.logger.eval_video_skip))
+                                     make_grid=True, skip=int(cfg.logger.eval_video_skip)))
         trsf.insert(2, DropPixels())
 
     return None, TransformedEnv(eval_parallel, trsf)

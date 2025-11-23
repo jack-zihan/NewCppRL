@@ -59,7 +59,7 @@ class AsyncEvaluator:
             Future对象，可用于查询任务状态
         """
         # 循环分配进度条position: 1, 2, ..., max_workers, 1, 2, ...
-        position = (next(self._position_counter) - 1) % self.max_workers + 1
+        position = int((next(self._position_counter) - 1) % self.max_workers + 1)
 
         # 提交评估任务到线程池，使用submit，传递phase_name以便返回时标记
         future = self.executor.submit(eval_func, model_path, cfg, step, position, phase_name)
@@ -98,7 +98,12 @@ class AsyncEvaluator:
                         'metrics': None,
                         'video_path': None
                     }
-                
+
+                    import traceback
+                    full_trace = traceback.format_exc()  # 完整堆栈
+                    torchrl_logger.error(f"完整异常堆栈:\n{full_trace}")  # 打印完整信息
+                    result = {'error': str(e), 'traceback': full_trace}
+
                 # 从pending中移除
                 del self.pending_results[step]
         
