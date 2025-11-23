@@ -313,345 +313,143 @@ Stage 3 (S3): Final Optimization
 ├── Sampling: [0.20, 0.30, 0.50] - heavy mid-game focus
 └── Terminal: No further transitions
 ```
+## 核心架构
 
-##### Implementation Architecture (`train_utils.py`)
+### 🌍 环境系统 (envs_new/)
 
-```python
-# Pure function - no side effects
-def update_curriculum_state(state, config, metrics) -> Tuple[CurriculumState, bool]:
-    """Returns (new_state, should_transition) without modifying environment"""
+#### 组件化架构
 
-    if stage_idx == 0:  # S1 logic
-        consecutive_count = count + 1 if completion >= 0.90 else 0
-        should_transition = consecutive_count >= config['s1_consecutive_k']
-
-    elif stage_idx == 1:  # S2 logic
-        ratio_95_to_done = metrics['ratio_95_to_done']
-        relative_change = abs(ratio - last_ratio) / max(last_ratio, 1e-6)
-        is_stable = completion >= 0.95 and relative_change < config['s2s3_threshold']
-        consecutive_stable = stable_count + 1 if is_stable else 0
-        should_transition = consecutive_stable >= config['s2_consecutive_k']
-
-    return new_state, should_transition
-
-# Side-effect function - modifies system
-def execute_stage_transition(next_stage, cfg, collector, replay_buffer, ...):
-    """Shutdown, rebuild components, update configuration"""
-
-    # 1. Shutdown old collector
-    collector.shutdown()
-
-    # 2. Update configuration with new reward coefficients
-    cfg.env.env_kwargs.update(next_stage['reward_tweaks'])
-
-    # 3. Update replay buffer sampling strategy
-    replay_buffer.set_sampling_ratio(next_stage['sampling_ratio'])
-
-    # 4. Create new collector with updated config
-    new_collector = create_collector(cfg, actor_model, device)
-
-    return new_collector, replay_buffer, iter(new_collector)
+```
+CppEnvBase（编排器）
+├── EnvironmentConfig    # 所有组件共享配置实例
+├── ScenarioGenerator    # MapCreator → agent + maps + state
+├── EnvironmentDynamics  # Updater链（拓扑排序依赖）
+├── ObservationGenerator # 多通道观察堆叠
+├── RewardSystem         # Calculator + group系数
+└── ActionProcessor      # 动作空间处理
 ```
 
-#### Bucketed Prioritized Replay Buffer
+#### 三大设计模式
 
-##### Design Philosophy
-The bucketed replay system addresses the fundamental challenge of sparse rewards in coverage tasks by ensuring balanced sampling across different task completion states.
+**1. StateVariable** - 自动delta计算的历史追踪
+- `current/previous` 属性自动访问历史
+- `change(steps_back)` 自动计算数值/元组差值
+- 用于奖励计算：`reward = coefficient * state.metric.change()`
 
-##### Implementation (`bucketed_replay.py`)
-```python
-class BucketedTensorDictPrioritizedReplayBuffer:
-    """Three-bucket system with dynamic sampling and fallback mechanism"""
+**2. Updater** - 声明式依赖组件
+- `get_dependencies()` 声明依赖
+- 拓扑排序保证正确执行顺序
+- 动态`add_updater/remove_updater`支持
 
-    def __init__(self, ...):
-        # Fixed capacity allocation (ensures fallback space)
-        capacity_success = max_size // 4   # 25%
-        capacity_near_end = max_size // 4  # 25%
-        capacity_mid = max_size // 2       # 50% (extra for fallback)
+**3. Calculator** - 可组合奖励+分组系数
+- `group` 属性实现系数继承（如`field_group`）
+- 配置自动映射：`reward_{name}` + `reward_{group}_coef`
+- 运行时系数更新支持课程学习
 
-    def extend(self, tensordict):
-        """Classify and route transitions to appropriate buckets"""
-        completion = tensordict[("next", "completion_ratio")]
-        done = tensordict[("next", "done")]
-        truncated = tensordict[("next", "truncated")]
+#### 环境版本对比
 
-        # Classification logic
-        success_mask = done & (completion >= 0.99) & (~truncated)
-        near_end_mask = (completion >= 0.90) & (~success_mask)
-        mid_mask = ~(success_mask | near_end_mask)
+| 版本 | 任务 | 核心创新 | 观察通道 | 关键组件 |
+|------|------|---------|---------|---------|
+| **v2** | 未知环境除草 | APF势场吸引 | 4: field/obstacle/weed/trajectory | APFCalculator(GPU/CPU自适应) |
+| **v4** | 纯覆盖率 | 重叠追踪 | 3: field/obstacle/trajectory | FieldCoverageUpdater |
+| **v5** | HIF引导覆盖 | 方向感知+双角编码 | 5: +global_cos/sin | OrientationAwareObservation |
+| **v6** | 时空覆盖 | 时间衰减奖励场 | 同v5 | 时序奖励衰减 |
 
-        # Route to buckets
-        if success_mask.any():
-            self._buffers[BucketId.SUCCESS].extend(tensordict[success_mask])
-        # Similar for NEAR_END and MID
+**关键差异**：
+- **v2**: `gpu_apf_bool()` 指数衰减势场，稀疏除草奖励
+- **v4**: `CoverageMapCreator` 重叠计数，无障碍默认
+- **v5**: `double_angles = 2.0 * angles` 确保θ和θ+180°同向
+- **v6**: 奖励场时间衰减机制
 
-    def sample(self) -> TensorDict:
-        """Sample with dynamic ratios and fallback to MID"""
-        n_success = int(batch_size * success_ratio)
-        n_near_end = int(batch_size * near_end_ratio)
-        n_mid = batch_size - n_success - n_near_end
+#### 扩展指南
 
-        def _safe_sample(bucket_id, n):
-            try:
-                return self._buffers[bucket_id].sample(n)
-            except (RuntimeError, ValueError):
-                if bucket_id != BucketId.MID:
-                    return self._buffers[BucketId.MID].sample(n)  # Fallback
-                raise  # MID bucket failure is fatal
+**添加新环境**：继承`CppEnvBase` → 修改组件 → 覆写`_get_observation_channels/maps()`
+**添加Updater**：实现`get_dependencies()` + `update(state_dict)`
+**添加Calculator**：设置`group`属性 → 实现`calculate(env_state, coefficient, config)`
 
-        # Combine samples from all buckets
-        parts = [_safe_sample(bid, n) for bid, n in ...]
-        return torch.cat(parts, dim=0)
+---
+
+### 🎓 训练系统 (rl_new/sac_cont_sy/)
+
+#### 训练管道
+
+```
+sac_curriculum.py
+├── SyncDataCollector → ParallelEnv → TransformedEnv
+├── BucketedReplayBuffer (25% SUCCESS / 25% NEAR_END / 50% MID)
+├── SAC (Actor + Twin Critics + Auto α)
+└── AsyncEvaluator (并行rollout + 顺序返回)
 ```
 
-##### Why This Design Works
-1. **Early Training**: SUCCESS bucket often empty → fallback to MID ensures training continues
-2. **Mid Training**: Balanced sampling across all buckets
-3. **Late Training**: Focus shifts to MID for trajectory optimization
-4. **Curriculum Integration**: Sampling ratios adjust automatically per stage
+#### 三阶段课程学习
 
-#### Asynchronous Evaluation System
+```
+S1: 学习扫描 (field_coef=1.0, turning=0.5, overlap=0)
+├─ 采样[0.40, 0.30, 0.30] 均衡探索
+└─ 转换：completion≥90% 连续3次 →
 
-##### Problem and Solution
-**Problem**: Evaluation rollouts are expensive (5-10 seconds per batch), blocking training reduces throughput by 30-50%.
+S2: 减少重叠 (field_coef=0.5, turning=0.2, overlap=-0.10)
+├─ 采样[0.30, 0.30, 0.40] 中期优化增强
+└─ 转换：completion≥95% + ratio95稳定(<5%变化) 连续5次 →
 
-**Solution**: Non-blocking evaluation with deterministic ordering for curriculum decisions.
-
-##### Implementation (`async_evaluator.py`)
-```python
-class AsyncEvaluator:
-    """Parallel evaluation with sequential result ordering"""
-
-    def __init__(self, max_workers=2):
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-        self.submitted_steps = []        # Submission order
-        self.pending_results = {}        # step → Future
-        self.completed_cache = {}        # step → result
-        self.next_return_index = 0       # Next result to release
-
-    def submit_eval(self, eval_func, model_path, cfg, step):
-        """Submit evaluation task without blocking"""
-        position = self._get_worker_position()  # For logging
-        future = self.executor.submit(eval_func, model_path, cfg, step, position)
-        self.submitted_steps.append(step)
-        self.pending_results[step] = future
-
-    def get_evaluate_results(self) -> List[Dict]:
-        """Return completed results in submission order"""
-        # Move completed futures to cache
-        for step, future in list(self.pending_results.items()):
-            if future.done():
-                self.completed_cache[step] = future.result()
-                del self.pending_results[step]
-
-        # Release results maintaining order
-        ordered_results = []
-        while self.next_return_index < len(self.submitted_steps):
-            next_step = self.submitted_steps[self.next_return_index]
-            if next_step in self.completed_cache:
-                ordered_results.append(self.completed_cache.pop(next_step))
-                self.next_return_index += 1
-            else:
-                break  # Wait for next in sequence
-
-        return ordered_results
+S3: 最终优化 (field_coef=0.10, turning=0.05, overlap=-0.20)
+└─ 采样[0.20, 0.30, 0.50] 重点中期优化
 ```
 
-##### Critical Design Decision
-Sequential ordering is essential because curriculum state transitions must be deterministic. Out-of-order results would cause incorrect stage transitions.
+**实现机制**（`train_utils.py`）：
+- `update_curriculum_state()` 纯函数判断转换
+- `execute_stage_transition()` 副作用函数重建系统
+  - shutdown collector → 更新config → 更新buffer采样比 → 创建新collector
 
-#### Key Utility Modules
+#### 分桶经验回放
 
-##### Environment Creation (`env_utils.py`)
+**设计哲学**：覆盖任务奖励稀疏 → 均衡采样不同完成状态
 
-**Transform Chain for Evaluation**:
-```python
-# Problem: Black frames in videos when episodes end
-# Solution: Three-transform chain
+**分类逻辑**：
+- SUCCESS: `done & completion≥99% & ~truncated`
+- NEAR_END: `completion≥90% & ~SUCCESS`
+- MID: 其余（50%容量作fallback）
 
-class KeepLastPixels(Transform):
-    """Cache last valid frame per environment"""
-    def _call(self, tensordict):
-        if pixel_sum == 0 or done:
-            use_cached_frame()
+**Why it Works**：
+1. 早期训练：SUCCESS空 → fallback to MID继续训练
+2. 中期训练：三桶均衡采样
+3. 晚期训练：MID占主导优化轨迹
+4. 课程集成：采样比自动调整
 
-class VideoRecorder(Transform):
-    """Record 2x2 grid videos"""
-    # Process pixels for video
+#### 异步评估
 
-class DropPixels(Transform):
-    """Remove pixels to save memory"""
-    def _call(self, tensordict):
-        tensordict.pop("pixels", None)
-        tensordict["next"].pop("pixels", None)  # Direct access, not ellipsis
+**问题**：评估耗时5-10秒 → 阻塞训练降低吞吐30-50%
+**方案**：`ThreadPoolExecutor`并行 + 缓存机制 + 顺序返回
 
-# Chain: KeepLastPixels → VideoRecorder → DropPixels
+**为什么需要顺序返回？**
+课程状态转换必须确定性 → 乱序结果会导致错误的阶段转换
+
+**实现要点**（`async_evaluator.py`）：
+```
+submitted_steps[]    # 提交顺序
+pending_results{}    # step→Future
+completed_cache{}    # step→result
+next_return_index    # 下一个待返回索引
 ```
 
-**Custom Metric Transform**:
-```python
-class Steps95ToDoneCounter(Transform):
-    """Count steps from 95% completion to episode end"""
-    def __init__(self):
-        self._armed = None  # Per-env boolean tensor
-        self._count = None  # Per-env counter tensor
+#### 关键工具模块
 
-    def _call(self, tensordict):
-        B = tensordict.batch_size[0]  # Parallel environments
+**Transform链**（`env_utils.py`）：
+- `KeepLastPixels`: 缓存有效帧避免黑屏
+- `VideoRecorder`: 2×2网格视频
+- `DropPixels`: 节省内存
+- `Steps95ToDoneCounter`: 矢量化per-env计数（95%→done步数）
 
-        # Initialize per-env state
-        if self._armed is None:
-            self._armed = torch.zeros(B, dtype=torch.bool)
-            self._count = torch.zeros(B, dtype=torch.int64)
+**模型创建**（`model_utils.py`）：
+- 关键：`action_spec.to(device)` **必须在**创建分布前
+- 原因：TanhNormal的low/high作为buffer继承device
 
-        # Vectorized computation
-        completion = tensordict["completion_ratio"].reshape(B)
-        self._armed |= (completion >= 0.95)
-        self._count = torch.where(self._armed, self._count + 1, self._count)
-```
+**配置系统**（Hydra）：
+- `env.env_kwargs` 直接传递给`gym.make()`
+- 课程转换时运行时修改：`cfg.env.env_kwargs.update(stage['reward_tweaks'])`
 
-##### Model Creation (`model_utils.py`)
+---
 
-**Critical Device Handling Fix**:
-```python
-def make_sac_models(env, device="cpu"):
-    """Create SAC models with correct device placement"""
-
-    # CRITICAL: Move action_spec to device BEFORE creating distribution
-    action_spec = env.action_spec
-    if env.batch_size:
-        action_spec = action_spec[(0,) * len(env.batch_size)]
-    action_spec = action_spec.to(device)  # Must be before distribution creation!
-
-    # TanhNormal stores bounds as buffers - they inherit device from action_spec
-    policy = ProbabilisticActor(
-        spec=action_spec,
-        distribution_kwargs={
-            "low": action_spec.space.low,   # Now on correct device
-            "high": action_spec.space.high,  # Now on correct device
-        }
-    )
-```
-
-#### Training Configuration System
-
-##### Hydra-Based Configuration (`config-sync-server.yaml`)
-```yaml
-env:
-  env_id: "NewPasture-v4"  # or v2, v5, v6
-  env_kwargs:  # Passed directly to gym.make()
-    # These get updated during curriculum transitions
-    reward_field_group_coef: 1.0
-    reward_turning_group_coef: 0.5
-    reward_overlap_penalty: 0.0
-
-curriculum:
-  enabled: true
-  s1_consecutive_k: 3  # S1→S2 transition threshold
-  s2_consecutive_k: 5  # S2→S3 transition threshold
-  s2s3_threshold: 0.05  # Stability threshold for S2→S3
-
-  stages:
-    - name: S1
-      reward_tweaks:
-        reward_field_group_coef: 1.0
-        reward_turning_group_coef: 0.5
-        reward_overlap_penalty: 0.0
-      sampling_ratio: [0.40, 0.30, 0.30]
-
-    - name: S2
-      reward_tweaks:
-        reward_field_group_coef: 0.5
-        reward_turning_group_coef: 0.2
-        reward_overlap_penalty: -0.10
-      sampling_ratio: [0.30, 0.30, 0.40]
-
-    - name: S3
-      reward_tweaks:
-        reward_field_group_coef: 0.10
-        reward_turning_group_coef: 0.05
-        reward_overlap_penalty: -0.20
-      sampling_ratio: [0.20, 0.30, 0.50]
-
-buffer:
-  bucketed: true
-  buffer_size: 500_000
-  batch_size: 2048
-  success_threshold: 0.99
-  near_end_threshold: 0.90
-  bucket_capacity_ratio: [0.25, 0.25, 0.50]
-```
-
-##### Runtime Configuration Mutation
-The key innovation is that configuration can be mutated at runtime during curriculum transitions:
-```python
-# During stage transition
-cfg.env.env_kwargs.update(next_stage['reward_tweaks'])
-new_collector = create_collector(cfg, ...)  # New environments use updated config
-```
-
-## Common Development Commands
-
-### Training with Curriculum Learning
-```bash
-# Activate environment (注意是new_venv而非venv)
-source new_venv/bin/activate
-
-# Run curriculum training (v4 environment by default)
-cd rl_new/sac_cont_sy
-python sac_curriculum.py
-
-# Override configuration via Hydra
-python sac_curriculum.py env.env_id=NewPasture-v5 \
-                        curriculum.enabled=true \
-                        buffer.bucketed=true
-
-# Use different config files
-python sac_curriculum.py --config-name config-sync-server  # Server configuration
-python sac_curriculum.py --config-name config-async        # Async collector mode
-```
-
-### Environment Testing and Development
-```bash
-# Test individual environment versions
-python envs_new/cpp_env_v4.py  # Has __main__ block for interactive testing
-python envs_new/cpp_env_v5.py  # Test HIF environment
-
-# Quick environment validation
-python -c "from envs_new.cpp_env_v4 import CppEnv; env = CppEnv(); obs, _ = env.reset(); print(f'v4 OK: {obs[\"observation\"].shape}')"
-
-# Test with specific configurations
-python -c "
-from envs_new.cpp_env_v5 import CppEnv
-env = CppEnv(
-    use_hif=True,
-    hif_propagate_distance=20,
-    num_obstacles_range=(3, 5),
-    render_mode='rgb_array'
-)
-obs, _ = env.reset(seed=42)
-print(f'HIF channels: {obs[\"observation\"].shape}')
-"
-```
-
-### Development Workflow for New Features
-```bash
-# 1. Create new environment version
-cp envs_new/cpp_env_v5.py envs_new/cpp_env_v6.py
-# Edit to add your features
-
-# 2. Test environment standalone
-python envs_new/cpp_env_v6.py
-
-# 3. Register in Gymnasium
-# Edit envs_new/__init__.py to add registration
-
-# 4. Test with training pipeline
-python rl_new/sac_cont_sy/sac_curriculum.py env.env_id=NewPasture-v6
-
-# 5. Monitor training with wandb
-# Logs automatically uploaded to wandb project: SAC_2025
-```
 
 ## Dependencies and Environment Setup
 
