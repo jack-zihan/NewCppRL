@@ -132,9 +132,12 @@ def apply_phase(phase: Phase, cfg: DictConfig, actor_model: torch.nn.Module, dev
     if phase.type == 'STAGE' and phase.env_params: # 更新环境参数
         cfg.env.env_kwargs.update(phase.env_params)
 
-    if replay_buffer is not None and cfg.buffer.bucketed: # 如果分桶更新回放缓冲区采样比例
-        replay_buffer.set_sampling_ratio(phase.sampling_ratio)
-        replay_buffer.reset_buckets()
+    if replay_buffer is not None:
+        if cfg.buffer.bucketed: # 如果分桶更新回放缓冲区采样比例
+            replay_buffer.set_sampling_ratio(phase.sampling_ratio)
+            replay_buffer.reset_buckets()
+        else:
+            replay_buffer.empty()  # 清空标准回放缓冲区
 
     if phase.type == 'PRETRAIN': # 更新学习率
         set_optimizer_group_lrs(optimizer, all_groups_lr=float(cfg.hif.pretrain.actor_lr))
