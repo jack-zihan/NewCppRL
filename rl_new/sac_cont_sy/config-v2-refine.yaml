@@ -1,0 +1,226 @@
+# SAC 同步训练（v2 精调版，四阶段课程学习）
+
+pretrained_model: null
+seed: 42
+in_server: False
+
+model:
+  architecture: "resnet"   # 可改为 "resnet"
+  backbone: "resnet18"
+
+env:
+  env_id: "NewPasture-v2"
+  env_kwargs:
+    # ---- 奖励主配置（与 S1 对齐） ----
+    weed_count: 3  # 与S1对齐
+    reward_weed_removal: 20.0
+    reward_base_penalty: -0.10
+    reward_field_group_coef: 0.05
+    reward_turning_group_coef: 0.0
+    reward_overlap_penalty: 0.0
+    reward_completion_bonus: 100.0
+    reward_apf: 1.0
+    overlap_tolerance: 1.0
+
+    # 地图与课程参数默认值（可被阶段覆盖）
+    map_dir: "envs_new/maps/weed_coverage"
+    field_scale_enabled: false
+    field_scale_range: [1.0, 1.0]
+    num_obstacles_range: [0, 0]
+
+    # v2 环境特有参数
+    use_apf: true
+    use_trajectory: true
+    use_mist: true
+
+    # 观察配置（多尺度 + 全局）
+    state_size: [256, 256]
+    state_downsize: [256, 256]
+    multiscale_feature_size: 32
+
+collector:
+  total_frames: 10_000_000
+  frames_per_batch: 20
+  init_random_frames: 50_000
+  env_per_collector: 1
+  num_collectors: 32
+  pin_memory: true
+
+training:
+  device: cuda:0
+  use_amp: False
+  total_updates: 1_000_000
+  grad_accum_steps: 1
+
+buffer:
+  buffer_size: 500_000
+  batch_size: 2048
+  pin_memory: false
+  prefetch: 2
+  temp_dir: "/root/rl_temp_data"
+  shared_memory: True
+  bucketed: false
+  bucket_capacity_ratio: [0.25, 0.25, 0.50]
+  success_threshold: 0.99
+  near_end_threshold: 0.90
+  alpha: 0.7
+  beta: 0.5
+
+optim:
+  lr_actor: 1.0e-5
+  weight_decay_actor: 1.0e-4
+  eps_actor: 1.0e-8
+  lr_critic: 3.0e-4
+  weight_decay_critic: 0
+  eps_critic: 1.0e-8
+  lr_alpha: 3.0e-4
+  weight_decay_alpha: 0
+  eps_alpha: 1.0e-8
+  max_grad_norm: 1.0
+
+loss:
+  gamma: 0.99
+  n_steps: 1
+  target_update_polyak: 0.9997
+  target_entropy_weight: 0.2
+  target_entropy: "auto"
+  utd_ratio: 1
+  loss_function: l2
+  alpha_init: 1.0
+
+hif:
+  enabled: false
+  decoder_type: "full"
+  initial_weight: 0.0
+  tv_weight: 1.0e-5
+  use_tv: true
+  weights:
+    S1: 0.0
+    S2: 0.0
+    S3: 0.0
+    S4: 0.0
+  env_strategy:
+    v4: "skip"
+    v5: "skip"
+    v6: "skip"
+    v5_weight: 0.0
+  online_auxiliary: false
+  update_frequency: 1
+  log_metrics: false
+  log_interval: 100
+  visualize: false
+  vis_interval: 1000
+  pretrain:
+    enabled: false
+    min_buffer_frames: 16384
+    max_updates: 0
+    actor_lr: 3.0e-4
+    loss_weight: 1.0
+    reset_optimizer_after: false
+
+compile:
+  enable: false
+  mode:
+  warmup: 2
+  cudagraphs: false
+
+logger:
+  mode: online
+  backend: wandb
+  project_name: SAC_2025_Weed
+  group_name: Weed_v2_refine
+  exp_name: Weed_v2_refine
+  model_name: ContinuousSAC
+  eval_worker: 1
+  eval_interval: 50_000
+  eval_episodes: 9
+  eval_max_steps: 5000
+  eval_video: true
+  eval_video_skip: 25
+  eval_device: cpu
+  show_progress: true
+
+curriculum:
+  enabled: true
+  stages:
+    # S1: APF 语义 + 基础探索（无障碍，少量 weed）
+    - name: S1
+      min_completion: 0.95
+      consecutive_k: 2
+      # 奖励配置
+      weed_count: 3
+      reward_weed_removal: 20.0
+      reward_base_penalty: -0.10
+      reward_field_group_coef: 0.05
+      reward_turning_group_coef: 0.0
+      reward_overlap_penalty: 0.0
+      reward_completion_bonus: 100.0
+      reward_apf: 1.0
+      overlap_tolerance: 1.0
+      sampling_ratio: [0.34, 0.33, 0.33]
+      field_scale_enabled: false
+      field_scale_range: [1.0, 1.0]
+      num_obstacles_range: [0, 0]
+
+    # S2: 探索 + 避障（加障碍，少量 weed）
+    - name: S2
+      min_completion: 0.95
+      consecutive_k: 2
+      weed_count: 10
+      reward_weed_removal: 20.0
+      reward_base_penalty: -0.13
+      reward_field_group_coef: 0.12
+      reward_turning_group_coef: 0.0
+      reward_overlap_penalty: 0.10
+      reward_completion_bonus: 200.0
+      reward_apf: 1.0
+      overlap_tolerance: 1.0
+      sampling_ratio: [0.34, 0.33, 0.33]
+      field_scale_enabled: false
+      field_scale_range: [1.0, 1.0]
+      num_obstacles_range: [5, 8]
+
+    # S3: 多 weed + 覆盖意识（search + 避障 + 多点 coverage）
+    - name: S3
+      min_completion: 0.95
+      consecutive_k: 2
+      weed_count: 100
+      stability_tolerance: 0.05
+      reward_weed_removal: 14.0
+      reward_base_penalty: -0.13
+      reward_field_group_coef: 0.3
+      reward_turning_group_coef: 0.0
+      reward_overlap_penalty: 0.25
+      reward_completion_bonus: 1000.0
+      reward_apf: 0.8
+      overlap_tolerance: 1.0
+      sampling_ratio: [0.34, 0.33, 0.33]
+      field_scale_enabled: false
+      field_scale_range: [1.0, 1.0]
+      num_obstacles_range: [5, 8]
+
+    # S4: 效率 + 完成（长域规划）
+    - name: S4
+      min_completion: 0.98
+      consecutive_k: 5
+      weed_count: 100
+      stability_tolerance: 0.03
+      reward_weed_removal: 8.0
+      reward_base_penalty: -0.18
+      reward_field_group_coef: 0.45
+      reward_turning_group_coef: 0.0
+      reward_overlap_penalty: 0.50
+      reward_completion_bonus: 2000.0
+      reward_apf: 0.6
+      overlap_tolerance: 1.0
+      sampling_ratio: [0.34, 0.33, 0.33]
+      field_scale_enabled: false
+      field_scale_range: [1.0, 1.0]
+      num_obstacles_range: [5, 8]
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${logger.exp_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
