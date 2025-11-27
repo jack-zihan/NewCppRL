@@ -254,19 +254,21 @@ class ResNetFPNDualHeadActor(nn.Module):
                     "HIF decoder未初始化！请在创建模型时设置enable_hif=True"
                 )
 
+            # 与CNN版本保持一致：动态读取observation尺寸作为HIF输出目标尺寸
+            target_size = observation.shape[-2:]
+
             if self.hif_decoder_type == 'two_stage':
                 # Two-stage decoder uses P2 and P3
                 # Note: P2 is 48×48, not 96×96 due to maxpool in ResNet
-                # We need to upsample final result to 96×96
                 hif_pred_48 = self.hif_decoder(
                     fpn_features['P2'],  # [B, 256, 48, 48]
                     fpn_features['P3']   # [B, 256, 24, 24]
                 )
-                hif_pred = F.interpolate(hif_pred_48, size=(96, 96), mode='bilinear', align_corners=False)
+                hif_pred = F.interpolate(hif_pred_48, size=target_size, mode='bilinear', align_corners=False)
             else:
                 # Full UNet decoder
                 hif_pred_48 = self.hif_decoder(fpn_features)
-                hif_pred = F.interpolate(hif_pred_48, size=(96, 96), mode='bilinear', align_corners=False)
+                hif_pred = F.interpolate(hif_pred_48, size=target_size, mode='bilinear', align_corners=False)
 
         return action_params, hif_pred
 

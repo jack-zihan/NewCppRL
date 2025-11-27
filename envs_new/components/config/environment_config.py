@@ -5,7 +5,7 @@ Provides a unified, flattened configuration for all environment components.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 from pathlib import Path
 
 
@@ -15,7 +15,7 @@ class EnvironmentConfig:
     
     # 核心环境参数
     action_type: str = "continuous" #"discrete"
-    max_episode_steps: int = 30000
+    max_episode_steps: int = 3600
     state_history_length: int = 2 # 观察历史长度
     use_history_vector: bool = False  # 是否使用历史序列向量模式（v4/v6启用）
     
@@ -23,8 +23,9 @@ class EnvironmentConfig:
     map_dir: str = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
     num_obstacles_range: Tuple[int, int] = (5, 8)
     obstacle_size_range: Tuple[int, int] = (10, 25)
-    use_box_boundary: bool = True
+    boundary_source: Optional[str] = "box"  # "box" | "field" | None
     weed_noise: float = 0.0
+    weed_count: int = 100  # 杂草数量（课程学习可调）
     use_trajectory: bool = True
     use_mist: bool = True
     use_apf: bool = True

@@ -117,7 +117,7 @@ logger:
   eval_worker: 1
   eval_interval: 50_000
   eval_episodes: 4
-  eval_max_steps: 5000
+  eval_max_steps: 3600
   eval_video: true
   eval_video_skip: 25
   eval_device: cpu
@@ -125,37 +125,44 @@ logger:
 
 curriculum:
   enabled: true
-  s1_consecutive_k: 3
-  s2_consecutive_k: 5
-  s2s3_threshold: 0.05
-  s1_min_completion: 0.90
-  s2_min_completion: 0.95
   stages:
+    # S1: 探索阶段 - 小地图，高容错，学习基础覆盖
     - name: S1
+      min_completion: 0.90
+      consecutive_k: 3
       reward_field_group_coef: 1.0
       reward_turning_group_coef: 0.5
-      reward_overlap_penalty: -0.20 # = 1.0/5 → R*=5（探索阶段：容忍5次重访）
-      overlap_tolerance: 5.0 # 观测归一化上限 = R*，观测值1.0表示达到breakeven阈值
+      reward_overlap_penalty: -0.20  # = 1.0/5 → R*=5（探索阶段：容忍5次重访）
+      overlap_tolerance: 5.0  # 观测归一化上限 = R*
       sampling_ratio: [0.40, 0.30, 0.30]
-      # 课程：田地面积缩放（易→难），缩放到原图的30%-50%
       field_scale_enabled: true
       field_scale_range: [0.5, 0.6]
+
+    # S2: 效率阶段 - 中地图，加稳定性检查
     - name: S2
+      min_completion: 0.95
+      consecutive_k: 5
+      stability_tolerance: 0.05
       reward_field_group_coef: 0.5
       reward_turning_group_coef: 0.2
-      reward_overlap_penalty: -0.25 # = 0.5/2 → R*=2（效率阶段：容忍2次重访）
-      overlap_tolerance: 2.0  # 观测归一化上限 = R*
+      reward_overlap_penalty: -0.25  # = 0.5/2 → R*=2（效率阶段：容忍2次重访）
+      overlap_tolerance: 2.0
       sampling_ratio: [0.30, 0.30, 0.40]
       field_scale_enabled: true
-      field_scale_range: [0.6, 0.8] # 课程：中等规模（50%-80%）
+      field_scale_range: [0.6, 0.8]
+
+    # S3: 优化阶段 - 全尺寸地图，终态
     - name: S3
+      min_completion: 0.97
+      consecutive_k: 5
+      stability_tolerance: 0.03
       reward_field_group_coef: 0.10
       reward_turning_group_coef: 0.05
       reward_overlap_penalty: -0.10  # = 0.1/1 → R*=1（优化阶段：要求1:1完美效率）
       overlap_tolerance: 1.0
       sampling_ratio: [0.20, 0.30, 0.50]
       field_scale_enabled: true
-      field_scale_range: [1.0, 1.0] # 课程：完整规模（100%）
+      field_scale_range: [1.0, 1.0]
 
 # ============ 1.3版本hydra, 提高效率自定义输出地址 ============
 hydra:

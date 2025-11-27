@@ -38,7 +38,7 @@ from rl_new.sac_cont_sy.train_utils_optimized import (create_replay_buffer, crea
                                                       build_training_schedule, ScheduleState, Phase,
                                                       maybe_advance_by_eval, maybe_advance_by_updates, apply_phase)
 
-from rl_new.sac_cont_sy.model_utils import make_sac_models, make_sac_resnet_dual_models
+from rl_new.sac_cont_sy.model_utils import make_sac_models, make_sac_resnet_dual_models, make_sac_cnn_dual_models
 from rl_new.sac_cont_sy.env_utils import make_train_environment
 from rl_new.sac_cont_sy.async_evaluator import AsyncEvaluator
 from torchrl_utils.model.resnet_fpn_dual import HIFReconstructionLoss
@@ -110,12 +110,24 @@ def main(cfg: DictConfig):
 
         # ============ 3. 创建模型 ============
         if cfg.model.architecture == "resnet":
-            actor, critic = make_sac_resnet_dual_models(env=make_train_environment(cfg, device="cpu"),
-                                                        device=train_device, enable_hif=cfg.hif.enabled,
-                                                        hif_decoder_type=cfg.hif.decoder_type,
-                                                        backbone_type=cfg.model.backbone,)
+            # ResNet-FPN双头模型：始终使用dual-head结构，是否启用HIF由enable_hif控制
+            actor, critic = make_sac_resnet_dual_models(
+                env=make_train_environment(cfg, device="cpu"),
+                device=train_device,
+                enable_hif=cfg.hif.enabled,
+                hif_decoder_type=cfg.hif.decoder_type,
+                backbone_type=cfg.model.backbone,
+            )
+        elif cfg.model.architecture == "cnn":
+            # CNN双头模型：与ResNet-FPN保持同样接口，enable_hif控制是否输出pred_ego_hif
+            actor, critic = make_sac_cnn_dual_models(
+                env=make_train_environment(cfg, device="cpu"),
+                device=train_device,
+                enable_hif=cfg.hif.enabled,
+            )
         else:
-            actor, critic = make_sac_models(env=make_train_environment(cfg, device="cpu"), device=train_device)
+            raise ValueError(f"Unsupported model.architecture='{cfg.model.architecture}', "
+                             f"expected 'resnet' or 'cnn'.")
 
         # 加载预训练模型
         if cfg.pretrained_model:
@@ -193,17 +205,17 @@ def main(cfg: DictConfig):
                 state, adv_upd = maybe_advance_by_updates(state, schedule[state.idx], cfg)
                 if adv_upd: should_transition = True
 
-            # 课程阶段切换判断
+            # 课程阶段切换判断（终态由位置决定）
             eval_results = async_evaluator.get_evaluate_results()
             if eval_results:
                 log_evaluate_results(eval_results, checkpoint_dir, logger)
-                state, adv_eval = maybe_advance_by_eval(state, schedule[state.idx], eval_results, cfg, cfg.curriculum.enabled)
+                state, adv_eval = maybe_advance_by_eval(state, schedule, eval_results)
                 if adv_eval: should_transition = True
 
             # 执行phase切换
             if should_transition and state.idx + 1 < len(schedule):
                 old_idx = state.idx
-                state = replace(state, idx=state.idx + 1, consec_completion=0, consec_stable=0, last_ratio95=None) # 切换到下一阶段状态
+                state = replace(state, idx=state.idx + 1, pass_streak=0, prev_metric=None)  # 切换到下一阶段状态
                 schedule[state.idx] = replace(schedule[state.idx],
                                               update_gate_frames=collected_frames + cfg.collector.init_random_frames) # 确定该阶段绝对帧数门控
                 collector, collector_iter, replay_buffer = apply_phase(schedule[state.idx], cfg, actor, train_device,

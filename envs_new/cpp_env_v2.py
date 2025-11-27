@@ -44,9 +44,9 @@ class APFCalculator(RewardCalculator):
             weed_vals = map_coordinates(apf[3], coords, order=1, mode='nearest', prefilter=False)
             
             # 计算奖励增量
-            reward_field = 0.0 * (field_vals[0] - field_vals[1])
+            reward_field = 1.0 * (field_vals[0] - field_vals[1])
             reward_obstacle = min(-0.3 * (obstacle_vals[0] - obstacle_vals[1]), 0)
-            reward_weed = 5.0 * (weed_vals[0] - weed_vals[1])
+            reward_weed = 3.0 * (weed_vals[0] - weed_vals[1])
             
             # 轨迹奖励（可选）
             if len(apf) > 4:
@@ -59,9 +59,9 @@ class APFCalculator(RewardCalculator):
             x_prev, y_prev = int(agent_pos_info.last[0]), int(agent_pos_info.last[1])
 
             # 计算各势场的变化量
-            reward_field = 0.0 * (apf[0][y_curr, x_curr] - apf[0][y_prev, x_prev])
+            reward_field = 1.0 * (apf[0][y_curr, x_curr] - apf[0][y_prev, x_prev])
             reward_obstacle = min(-0.3 * (apf[2][y_curr, x_curr] - apf[2][y_prev, x_prev]), 0)  # 只保留惩罚负奖励
-            reward_weed = 5.0 * (apf[3][y_curr, x_curr] - apf[3][y_prev, x_prev])
+            reward_weed = 3.0 * (apf[3][y_curr, x_curr] - apf[3][y_prev, x_prev])
 
             # 轨迹奖励（可选）
             reward_trajectory = min(-0.0 * (apf[-1][y_curr, x_curr] - apf[-1][y_prev, x_prev]), 0) \
@@ -137,10 +137,10 @@ class CppEnv(CppEnvBase):
 
         # apf变换或直接使用
         if self.config.use_apf:
-            obs_field = self.get_discounted_apf(field_edges, 30)
-            obs_obstacle = self.get_discounted_apf(obstacle_edges, 10, pad=True)
+            obs_field = self.get_discounted_apf(field_edges, 64) # 原版30
+            obs_obstacle = self.get_discounted_apf(obstacle_edges, 3, pad=True)
             obs_obstacle = np.maximum(obs_obstacle, np.logical_and(obstacle, mist))
-            obs_weed = self.get_discounted_apf(weed_filtered, 40, 1e-2)
+            obs_weed = self.get_discounted_apf(weed_filtered, 40, 1e-2) # 原版40
             obs_trajectory = self.get_discounted_apf(trajectory, 4) if self.config.use_trajectory else trajectory
         else:
             obs_field = field_edges.astype(float)
@@ -170,13 +170,18 @@ class CppEnv(CppEnvBase):
                               / (self.config.overlap_tolerance + 1))  # 当观测=1.0时，表示该区域已达到奖励breakeven阈值
         obs_maps['overlap'] = {'map': normalized_overlap.astype(np.float32), 'pad': 0.0}
 
-        # 覆盖顺序秩通道（稳定秩）：rank = order_label / total_field_area，未覆盖=0
-        normalized_order_map = (self.maps_dict['time_series_coveraged_field'].astype(np.float32) /
-                                float(int(self.env_state.total_field_area))).astype(np.float32)
-        obs_maps['time_series_coveraged_field'] = {'map': normalized_order_map, 'pad': 0.0}
+        # # 覆盖顺序秩通道（稳定秩）：rank = order_label / total_field_area，未覆盖=0
+        # normalized_order_map = (self.maps_dict['time_series_coveraged_field'].astype(np.float32) /
+        #                         float(int(self.env_state.total_field_area))).astype(np.float32)
+        # obs_maps['time_series_coveraged_field'] = {'map': normalized_order_map, 'pad': 0.0}
 
         return obs_maps
 
+    def _get_step_info(self) -> Dict[str, Any]:
+        """base基础上增加overlap_count信息"""
+        step_info = super()._get_step_info() # 继承base的字段
+        step_info['overlap_count'] = np.array(self.env_state.overlap_count, dtype=np.float32)
+        return step_info
 
 if __name__ == "__main__":
     if_render = True
@@ -188,7 +193,8 @@ if __name__ == "__main__":
         # use_global_features=False,
         # num_obstacles_range = [0, 0]
         # map_dir = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
-        map_dir = "envs_new/maps/indoor_coverage"
+        # map_dir = "envs_new/maps/indoor_coverage",
+        boundary_source = "field"
     )
     # Note: HumanRendering wrapper would be added here if available
     if if_render: env: CppEnv = HumanRendering(env)  # 封装后，只接收render_mode="rgb_array"的env，使得step和reset的时候展示渲染图像

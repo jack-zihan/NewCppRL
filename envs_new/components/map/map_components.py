@@ -136,7 +136,7 @@ class FieldCreator:
 
 
 class AgentCreator:
-    """创建并定位Agent"""
+    """创建并定位Agent，根据boundary_source选择生成策略"""
 
     @classmethod
     def get_dependencies(cls) -> List[str]:
@@ -145,39 +145,50 @@ class AgentCreator:
     def generate(self, state: Dict[str, Any], rng: np.random.Generator) -> None:
         bounding_box = state['env_state'].get_static_info('bounding_box')
         dimensions = state['env_state'].get_static_info('dimensions')
+        field_map = state['maps_dict']['field']
 
-        position, direction = self._calculate_pose(
-            bounding_box, dimensions,
-            state['options'].get('initial_position'), state['options'].get('initial_direction'))
+        position, direction = self._calculate_pose(bounding_box, dimensions, field_map, state['config'], rng,
+                                                   state['options'].get('initial_position'),
+                                                   state['options'].get('initial_direction'))
 
-        agent = AgentFactory.create_mower_agent(state['config'], position, direction)
-        state['agent'] = agent
+        state['agent'] = AgentFactory.create_mower_agent(state['config'], position, direction)
 
     def _calculate_pose(self, bounding_box: List[np.ndarray], dimensions: Tuple[int, int],
+                        field_map: np.ndarray, config, rng: np.random.Generator,
                         override_position: Optional[Tuple[float, float]],
                         override_direction: Optional[float]) -> Tuple[Tuple[float, float], float]:
-        """计算agent初始位置和方向"""
+        """计算agent初始位置和方向，根据boundary_source分支处理"""
+        if config.boundary_source == "field": #在field安全区域内随机生成agent位置和方向
+            # 创建安全区域（腐蚀field，确保agent完全在内）
+            safe_margin = int(config.agent_length * 2)  # 安全边距 = 2倍agent长度
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (safe_margin, safe_margin))
+            safe_zone = cv2.erode(field_map, kernel, iterations=1)
+            safe_positions = np.argwhere(safe_zone > 0)
 
-        # 如果没有bounding_box，默认在图像中间生成
-        if not bounding_box:
-            width, height = dimensions
-            return (width / 2, height / 2), 0.0
+            # 若安全区域为空，则在field质心处放置agent
+            if len(safe_positions) == 0:
+                field_positions = np.argwhere(field_map > 0)
+                center = field_positions.mean(axis=0)
+                position =  (float(center[1]), float(center[0]))
+            else: # 否则从安全区任取一个位置作为起点
+                y, x = safe_positions[rng.integers(0, len(safe_positions))]
+                position = (float(x), float(y))
+            direction = float(rng.uniform(0, 360))
+        else:
+            box = bounding_box[0]
+            edge1, edge2 = box[1, 0] - box[0, 0], box[2, 0] - box[1, 0]
+            pos_index, direction_vector = (0, edge1) if math.hypot(*edge1) > math.hypot(*edge2) else (1, edge2)
+            position = (float(box[pos_index, 0, 0]), float(box[pos_index, 0, 1]))
+            direction_vector = direction_vector / math.hypot(*direction_vector)
+            direction = math.degrees(math.atan2(direction_vector[1], direction_vector[0]))
 
-        # 否则固定在boudingbox的一个点的长边上
-        box = bounding_box[0]
-        edge1 = box[1, 0] - box[0, 0]
-        edge2 = box[2, 0] - box[1, 0]
-        pos_index, direction_vector = (0, edge1) if math.hypot(*edge1) > math.hypot(*edge2) else (1, edge2)
-        position = (float(box[pos_index, 0, 0]), float(box[pos_index, 0, 1]))
-        direction_vector = direction_vector / math.hypot(*direction_vector)
-        direction = math.degrees(math.atan2(direction_vector[1], direction_vector[0]))
-
+        # 用户覆盖（支持部分覆盖）
         if override_position is not None:
             position = override_position
         if override_direction is not None:
             direction = override_direction
-        return position, direction
 
+        return position, direction
 
 class ObstacleCreator:
     """生成随机障碍物"""
@@ -204,9 +215,9 @@ class ObstacleCreator:
         else: # 否则随机生成障碍物
             obstacles = self._generate_obstacles(dimensions, state['maps_dict']['field'], state['agent'].position,
                                                  state['agent'].length, config, rng)
-        if config.use_box_boundary:
-            boundary = self._generate_boundary(state['env_state'].get_static_info('dimensions'),
-                                               state['env_state'].get_static_info('bounding_box'), config)
+        if config.boundary_source:
+            boundary = self._generate_boundary(state['env_state'].get_static_info('bounding_box'),
+                                               state['maps_dict']['field'], config)
             obstacles = np.logical_or(obstacles, boundary).astype(np.uint8)
         state['maps_dict']['obstacle'] = obstacles
 
@@ -272,17 +283,19 @@ class ObstacleCreator:
 
         return distance_to_agent > min_distance
 
-    def _generate_boundary(self, dimensions: Tuple[int, int],
-                           bounding_box: List[np.ndarray], config) -> np.ndarray:
-        """生成边界障碍物"""
-        if not config.use_box_boundary or not bounding_box:
-            return np.zeros(dimensions[::-1], dtype=np.uint8)
-
-        boundary_map = np.ones(dimensions, dtype=np.uint8)
-        expanded_box = self._calculate_expanded_box(bounding_box[0], config)
-        cv2.fillPoly(boundary_map, [expanded_box], color=(0,))
-
-        return boundary_map
+    def _generate_boundary(self, bounding_box: List[np.ndarray],
+                           field_map: np.ndarray, config) -> np.ndarray:
+        """根据boundary_source生成边界障碍物，"field": field外部为障碍（精确轮廓），"box": bounding box外部为障碍（带扩展） """
+        if config.boundary_source == "field":
+            return (field_map == 0).astype(np.uint8)
+        elif config.boundary_source == "box":
+            h, w = field_map.shape
+            boundary_map = np.ones((h, w), dtype=np.uint8)
+            expanded_box = self._calculate_expanded_box(bounding_box[0], config)
+            cv2.fillPoly(boundary_map, [expanded_box], color=(0,))
+            return boundary_map
+        else:
+            return np.zeros_like(field_map)
 
     def _create_random_obstacle(self, dimensions: Tuple[int, int], config, rng: np.random.Generator) -> np.ndarray:
         """创建随机障碍物"""

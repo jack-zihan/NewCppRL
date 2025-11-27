@@ -19,7 +19,7 @@ from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl_utils_new.local_video_recorder import LocalVideoRecorder
 from torchrl.record import VideoRecorder
 from rl_new.sac_cont_sy.env_utils import make_single_environment, make_drop_pixels_eval_environment
-from rl_new.sac_cont_sy.model_utils import make_sac_resnet_dual_models, make_sac_models
+from rl_new.sac_cont_sy.model_utils import make_sac_resnet_dual_models, make_sac_cnn_dual_models, make_sac_models
 
 class HIFAssistedSACLoss(torch.nn.Module):
     """自适应Loss：phase回调驱动，PRETRAIN仅HIF，训练阶段SAC+可选HIF（fail-fast设计）"""
@@ -292,8 +292,14 @@ def evaluate_policy_standalone(model_path, cfg, step, position=1, phase_name=Non
             hif_decoder_type=cfg.hif.decoder_type,
             backbone_type=cfg.model.backbone,
         )
+    elif cfg.model.architecture == "cnn":
+        actor, _ = make_sac_cnn_dual_models(
+            env=make_single_environment(cfg, device="cpu"),
+            device="cpu",
+            enable_hif=cfg.hif.enabled,
+        )
     else:
-        actor, _ = make_sac_models(env=make_single_environment(cfg, device="cpu"), device="cpu")
+        raise ValueError(f"Unsupported model.architecture='{cfg.model.architecture}'")
     actor.load_state_dict(checkpoint['actor'])
     actor.eval()
 

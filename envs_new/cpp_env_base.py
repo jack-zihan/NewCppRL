@@ -140,7 +140,7 @@ class CppEnvBase(gym.Env):
         options = options or {}
         self.agent, self.maps_dict, self.env_state = self.scenario_generator.generate_scenario(
             map_id=options.get('map_id'), scenario_directory=options.get('specific_scenario_dir'),
-            weed_count=options.get('weed_count', 100), weed_distribution=options.get('weed_distribution', 'uniform'),
+            weed_count=options.get('weed_count', self.config.weed_count), weed_distribution=options.get('weed_distribution', 'uniform'),
             initial_position=options.get('initial_position'), initial_direction=options.get('initial_direction')
         )
 
@@ -224,9 +224,10 @@ class CppEnvBase(gym.Env):
         return obs_maps
 
     def _get_observation_vector(self) -> np.ndarray:
-        """归一化转向值"""
-        return np.array([self.agent.last_steer / self.config.w_max],
-                        dtype=np.float32)
+        """归一化转向值, 四维向量：[speed, steer, coverage_ratio, time_progress]"""
+        return np.array([self.agent.last_speed / self.config.v_max, self.agent.last_steer / self.config.w_max,
+                         self.env_state.weed_coverage_ratio,
+                         self.env_state.current_step / self.env_state.max_steps],dtype=np.float32)
 
     def _get_completion_ratio(self) -> np.ndarray:
         """默认获取杂草完成率"""

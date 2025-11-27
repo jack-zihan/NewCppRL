@@ -6,7 +6,7 @@ from tensordict.nn import TensorDictModule, InteractionType, NormalParamExtracto
 from torchrl.modules import ProbabilisticActor, TanhNormal, ValueOperator
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 
-from torchrl_utils.model.deep_q_net import DeepQNet
+from torchrl_utils.model.deep_q_net import DeepQNet, CNNDualHeadActor
 from torchrl_utils.model.resnet_fpn_dual import ResNetFPNDualHeadActor, ResNetFPNCritic
 
 
@@ -120,11 +120,12 @@ def make_sac_resnet_dual_models(env, device: str = "cpu", enable_hif: bool = Tru
     # 准备环境规格
     input_shape, action_spec, vec_dim, action_dim = _prepare_env_specs(env, device)
     in_channels = input_shape[0]
+    fpn_channels = 128  # FPN特征通道数
 
     # Actor网络：ResNet-FPN编码器 + 条件HIF decoder
     actor_net = ResNetFPNDualHeadActor(
         in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim,
-        fpn_channels=256, hidden_dim=512, pretrained=True,
+        fpn_channels=fpn_channels, hidden_dim=512, pretrained=True, # fpn_channels=256
         enable_hif=enable_hif, hif_decoder_type=hif_decoder_type,
         decoder_channels=128, backbone_type=backbone_type,
     ).to(device)
@@ -150,8 +151,8 @@ def make_sac_resnet_dual_models(env, device: str = "cpu", enable_hif: bool = Tru
     )
 
     # Critic网络：独立的ResNet-FPN编码器
-    critic_net = ResNetFPNCritic(in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim, fpn_channels=256,
-        hidden_dim=512, pretrained=True, backbone_type=backbone_type,).to(device)
+    critic_net = ResNetFPNCritic(in_channels=in_channels, vec_dim=vec_dim, action_dim=action_dim,
+        fpn_channels=fpn_channels, hidden_dim=512, pretrained=True, backbone_type=backbone_type,).to(device)
 
     critic = ValueOperator(in_keys=["observation", "vector", "action"], module=critic_net)
 
@@ -163,6 +164,101 @@ def make_sac_resnet_dual_models(env, device: str = "cpu", enable_hif: bool = Tru
             "vector": td0["vector"].unsqueeze(0) if td0["vector"].dim()==1 else td0["vector"],
         }, batch_size=[1])
 
+        actor(td)
+        critic(td)
+
+    env.close()
+    del env
+
+    return actor, critic
+
+
+def make_sac_cnn_dual_models(env, device: str = "cpu", enable_hif: bool = True) -> tuple[nn.Module, nn.Module]:
+    """创建CNN双头SAC模型（动作 + 可选HIF预测），用于v5/v6快速调参场景。
+
+    设计要点：
+    - 主干使用与DeepQNet一致的IMPALA风格CNN；
+    - 动作头结构保持与原CNN版本对齐（ConvEncoder→512→512→2*action_dim）；
+    - HIF头为轻量decoder，仅在enable_hif=True时启用，对v4/v2无侵入。
+    """
+    input_shape, action_spec, vec_dim, action_dim = _prepare_env_specs(env, device)
+    in_channels = input_shape[0]
+
+    # CNN配置：用于快速调参的中号配置 (32, 64, 128)
+    cnn_channels = (32, 64, 128)
+    kernel_sizes = (3, 3, 3)
+    strides = (1, 1, 1)
+    hidden_dim = 512
+
+    # Actor网络：CNNDualHeadActor + ActorWrapper → NormalParamExtractor → ProbabilisticActor
+    actor_net = CNNDualHeadActor(
+        raster_shape=input_shape,
+        vec_dim=vec_dim,
+        action_dim=action_dim,
+        cnn_channels=cnn_channels,
+        kernel_sizes=kernel_sizes,
+        strides=strides,
+        hidden_dim=hidden_dim,
+        cnn_activation_class=torch.nn.SiLU,
+        mlp_activation_class=torch.nn.SiLU,
+        enable_hif=enable_hif,
+    ).to(device)
+
+    actor_base = TensorDictModule(
+        ActorWrapper(actor_net, enable_hif=enable_hif),
+        in_keys=["observation", "vector"],
+        out_keys=["action_params", "pred_ego_hif"] if enable_hif else ["action_params"],
+    )
+
+    param_module = TensorDictModule(
+        NormalParamExtractor(scale_mapping="biased_softplus_1.0", scale_lb=1e-4),
+        in_keys=["action_params"],
+        out_keys=["loc", "scale"],
+    )
+
+    actor = ProbabilisticActor(
+        spec=action_spec,
+        module=TensorDictSequential(actor_base, param_module),
+        in_keys=["loc", "scale"],
+        distribution_class=TanhNormal,
+        distribution_kwargs={
+            "low": action_spec.space.low,
+            "high": action_spec.space.high,
+            "tanh_loc": True,
+        },
+        default_interaction_type=InteractionType.RANDOM,
+        return_log_prob=False,
+    )
+
+    # Critic网络：与make_sac_models一致的CNN架构（独立编码器）
+    qvalue_net = DeepQNet(
+        raster_shape=input_shape,
+        cnn_channels=cnn_channels,
+        kernel_sizes=kernel_sizes,
+        strides=strides,
+        vec_dim=vec_dim + action_dim,
+        hidden_dim=hidden_dim,
+        output_num=1,
+        cnn_activation_class=torch.nn.SiLU,
+        mlp_activation_class=torch.nn.SiLU,
+    ).to(device)
+
+    critic = ValueOperator(in_keys=["observation", "vector", "action"], module=qvalue_net)
+
+    # 懒加载初始化
+    with torch.no_grad(), set_exploration_type(ExplorationType.RANDOM):
+        td0 = env.fake_tensordict().to(device)
+        td = _TensorDict(
+            {
+                "observation": td0["observation"].unsqueeze(0)
+                if td0["observation"].dim() == 3
+                else td0["observation"],
+                "vector": td0["vector"].unsqueeze(0)
+                if td0["vector"].dim() == 1
+                else td0["vector"],
+            },
+            batch_size=[1],
+        )
         actor(td)
         critic(td)
 

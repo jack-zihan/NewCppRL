@@ -28,11 +28,15 @@ tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 class Phase:
     """训练阶段配置（PRETRAIN 或课程 STAGE）"""
     type: str  # "PRETRAIN" | "STAGE"
-    name: str  # "PRETRAIN" | "S1" | "S2" | "S3"
+    name: str  # "PRETRAIN" | "S1" | "S2" | "S3" | ...
     env_params: Optional[Dict] = None
     sampling_ratio: Optional[Tuple[float, ...]] = None
     hif_weight: float = 0.0
     update_gate_frames: int = 0
+    # 课程切换条件（终态由位置判断，非Phase属性）
+    min_completion: float = 0.9            # 完成率阈值
+    consecutive_k: int = 3                  # 连续达标次数
+    stability_tolerance: Optional[float] = None  # 稳定性容差（None=不检查）
 
 
 @dataclass
@@ -40,9 +44,8 @@ class ScheduleState:
     """日程运行时状态（课程推进跟踪）"""
     idx: int = 0
     pretrain_updates: int = 0
-    consec_completion: int = 0
-    consec_stable: int = 0
-    last_ratio95: Optional[float] = None
+    pass_streak: int = 0                   # 统一：连续达标次数
+    prev_metric: Optional[float] = None    # 统一：上次评估值（用于稳定性检查）
 
 
 def build_training_schedule(cfg: DictConfig) -> List[Phase]:
@@ -56,24 +59,41 @@ def build_training_schedule(cfg: DictConfig) -> List[Phase]:
             'field_scale_enabled': bool(stage_cfg.field_scale_enabled),
             'field_scale_range': (float(stage_cfg.field_scale_range[0]), float(stage_cfg.field_scale_range[1])),
         }
-
         # 可选课程参数：仅当在stage配置中显式给出时才覆盖环境默认值
-        if "num_obstacles_range" in stage_cfg:
-            env_params["num_obstacles_range"] = (
-                int(stage_cfg.num_obstacles_range[0]),
-                int(stage_cfg.num_obstacles_range[1]),
-            )
+        #   - 保持向后兼容：旧配置未声明时使用 EnvironmentConfig 默认值
+        if "reward_weed_removal" in stage_cfg:
+            env_params["reward_weed_removal"] = float(stage_cfg.reward_weed_removal)
+        if "reward_base_penalty" in stage_cfg:
+            env_params["reward_base_penalty"] = float(stage_cfg.reward_base_penalty)
+        if "reward_completion_bonus" in stage_cfg:
+            env_params["reward_completion_bonus"] = float(stage_cfg.reward_completion_bonus)
+        if "reward_apf" in stage_cfg:
+            env_params["reward_apf"] = float(stage_cfg.reward_apf)
 
+        if "num_obstacles_range" in stage_cfg:
+            env_params["num_obstacles_range"] = (int(stage_cfg.num_obstacles_range[0]), int(stage_cfg.num_obstacles_range[1]))
+        if "weed_count" in stage_cfg:
+            env_params["weed_count"] = int(stage_cfg.weed_count)
         return env_params
 
     def _create_phase(stage_cfg) -> Phase:
+        """创建阶段配置（终态判断由位置决定，不在此处理）"""
         name = str(stage_cfg.name)
-        return Phase(type='STAGE', name=name, env_params=_env_params(stage_cfg),
-                     sampling_ratio=tuple(stage_cfg.sampling_ratio), hif_weight=float(getattr(cfg.hif.weights, name)),
-                     update_gate_frames=int(cfg.collector.init_random_frames),)
+        return Phase(
+            type='STAGE', name=name,
+            env_params=_env_params(stage_cfg),
+            sampling_ratio=tuple(stage_cfg.sampling_ratio),
+            hif_weight=float(getattr(cfg.hif.weights, name, 0.0)),
+            update_gate_frames=int(cfg.collector.init_random_frames),
+            min_completion=float(stage_cfg.min_completion),      # 必须配置，缺失则报错
+            consecutive_k=int(stage_cfg.consecutive_k),          # 必须配置，缺失则报错
+            stability_tolerance=getattr(stage_cfg, 'stability_tolerance', None),  # 可选配置
+        )
+
     # 课程学习列表
-    curriculum_phases = [_create_phase(s) for s in cfg.curriculum.stages] if cfg.curriculum.enabled else \
-                        [_create_phase(cfg.curriculum.stages[-1])] # 不开启课程学习则只用最终阶段参数
+    stages = list(cfg.curriculum.stages) if cfg.curriculum.enabled else [cfg.curriculum.stages[-1]]
+    curriculum_phases = [_create_phase(s) for s in stages]
+
     # 判断是否预训练
     if cfg.hif.enabled and cfg.hif.pretrain.enabled:
         pretrain_phase = Phase(type='PRETRAIN', name='PRETRAIN', env_params=curriculum_phases[0].env_params,
@@ -82,42 +102,40 @@ def build_training_schedule(cfg: DictConfig) -> List[Phase]:
         schedule = [pretrain_phase] + curriculum_phases
     else:
         schedule = curriculum_phases
+
     torchrl_logger.info(f"[Schedule] {[p.name for p in schedule]}")
     return schedule
 
 
-def maybe_advance_by_eval(state: ScheduleState, phase: Phase, metrics_list: list, cfg: DictConfig,
-                          curriculum_enabled: bool) -> Tuple[ScheduleState, bool]:
-    """根据评估指标判断是否推进课程（仅 S1→S2, S2→S3）"""
-    # 不启动课程学习则不推进
-    if not curriculum_enabled: return state, False
+def maybe_advance_by_eval(state: ScheduleState, schedule: List[Phase],
+                          metrics_list: list) -> Tuple[ScheduleState, bool]:
+    """统一的课程推进判断 - 终态由位置决定"""
+    # 终态检查：已到最后一个阶段 → 不推进
+    if state.idx >= len(schedule) - 1:
+        return state, False
 
-    # 只处理匹配当前阶段的评估结果（避免阶段切换后延迟返回的评估污染课程推进）
-    valid_metrics = [m for m in metrics_list if m.get('phase_name') == phase.name]
-    if not valid_metrics: return state, False  # 所有评估都不属于当前阶段，不推进
-    metrics_list = valid_metrics  # 用过滤后的结果继续处理
+    phase = schedule[state.idx]
 
-    # S1阶段：连续N次评估达到最低完成度即可推进
-    if phase.name == 'S1':
-        consecutive_success_count = state.consec_completion
-        for metric in metrics_list:
-            consecutive_success_count = consecutive_success_count + 1 \
-                if metric['metrics']['eval/completion_ratio'] >= cfg.curriculum.s1_min_completion else 0
-        new_state = replace(state, consec_completion=consecutive_success_count)
-        return new_state, consecutive_success_count >= cfg.curriculum.s1_consecutive_k
+    # 过滤当前阶段的有效评估（避免延迟返回的评估污染课程推进）
+    valid = [m for m in metrics_list if m.get('phase_name') == phase.name]
+    if not valid:
+        return state, False
 
-    if phase.name == 'S2': # S2阶段：连续N次评估完成度和稳定性均达标即可推进
-        consecutive_stable_count, previous_ratio95 = state.consec_stable, state.last_ratio95
-        for metric in metrics_list:
-            if metric['metrics']['eval/completion_ratio'] >= cfg.curriculum.s2_min_completion and (previous_ratio95 is not None):
-                relative_change = abs(metric['metrics']['eval/ratio_95_to_done_mean'] - previous_ratio95) / max(previous_ratio95, 1e-6)
-                stable = relative_change< float(cfg.curriculum.s2s3_threshold)
-            else:
-                stable = False
-            consecutive_stable_count = consecutive_stable_count + 1 if stable else 0
-        new_state = replace(state, consec_stable=consecutive_stable_count, last_ratio95=metric['metrics']['eval/ratio_95_to_done_mean'])
-        return new_state, consecutive_stable_count>= int(cfg.curriculum.s2_consecutive_k)
-    return state, False # 预训练和S3阶段不推进，但其实只有课程阶段，因为预训练不会评估
+    streak, prev = state.pass_streak, state.prev_metric
+
+    for m in valid:
+        completion = m['metrics']['eval/completion_ratio']
+        current = m['metrics'].get('eval/ratio_95_to_done_mean', completion)
+
+        # 统一判断逻辑：completion达标 + 可选的稳定性检查
+        passed = completion >= phase.min_completion
+        if passed and phase.stability_tolerance is not None and prev is not None:
+            passed = abs(current - prev) / max(prev, 1e-6) < phase.stability_tolerance
+
+        streak = streak + 1 if passed else 0
+        prev = current
+
+    return replace(state, pass_streak=streak, prev_metric=prev), streak >= phase.consecutive_k
 
 def maybe_advance_by_updates(state: ScheduleState, phase: Phase, cfg: DictConfig) -> Tuple[ScheduleState, bool]:
     """根据更新步数判断 PRETRAIN 是否推进"""

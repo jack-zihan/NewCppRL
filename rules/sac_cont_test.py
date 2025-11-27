@@ -38,7 +38,7 @@ noise_set = [0, 0, 0]
 LOG_DIR = BASE_DIR / 'rules' / 'logs'
 
 noise_set = [0, 0, 0]
-difficulty = "easy"
+difficulty = "hard"
 rl_model = "t[02600]_r[2731.41=2717.75~2750.74].pt"
 save_path = LOG_DIR / f"{rl_model}_{difficulty}.csv"
 
@@ -59,9 +59,9 @@ costs = []
 
 cover_90,cover_95, cover_98, cover, dist_list = -1, -1, -1, [], []
 init_weed = env.map_weed.sum()
-weed_dist = "gaussian"
-random_seed = 25
-map_id = 2
+weed_dist = "uniform"
+random_seed = 47
+map_id = 63
 collapse = -1
 overall_length = 0
 
