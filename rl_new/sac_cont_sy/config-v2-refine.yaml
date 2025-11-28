@@ -54,10 +54,10 @@ training:
 
 buffer:
   buffer_size: 500_000
-  batch_size: 2048
+  batch_size: 512 #2048
   pin_memory: false
   prefetch: 2
-  temp_dir: "/root/rl_temp_data"
+  temp_dir: "/mnt/data/rl_temp_data"
   shared_memory: True
   bucketed: false
   bucket_capacity_ratio: [0.25, 0.25, 0.50]
@@ -134,7 +134,7 @@ logger:
   eval_worker: 1
   eval_interval: 50_000
   eval_episodes: 9
-  eval_max_steps: 5000
+  eval_max_steps: 2500
   eval_video: true
   eval_video_skip: 25
   eval_device: cpu

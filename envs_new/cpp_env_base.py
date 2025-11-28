@@ -81,7 +81,7 @@ class CppEnvBase(gym.Env):
 
     def _get_expected_vector_length(self) -> int:
         """预期的observation vector维度，包含当前时间t和完成度c, 以及当前坐标系下的轨迹信息（x, y , steer, speed, der_cos, dre_sin）, 为了不影响除草，设置是否开启的开关，覆盖问题才开启"""
-        return 2 + 6 * self.config.state_history_length if self.config.use_history_vector else 1
+        return 2 + 6 * self.config.state_history_length if self.config.use_history_vector else 4
 
     def _initialize_spaces(self) -> None:
         """Initialize action and observation spaces."""

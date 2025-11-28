@@ -89,7 +89,7 @@ class CppEnv(CppEnvBase):
     def _get_observation_channels(self) -> int:
         """v2环境的观察通道数：field, mist_inv, obstacle, weed, (trajectory)
         11月17日加上了overlap, time_series_coveraged_field"""
-        return 4 + int(self.config.use_trajectory) + 2
+        return 4 + int(self.config.use_trajectory) + 1 # time_series_coveraged_field去掉了
 
         # return 4 + int(self.config.use_trajectory)
 
