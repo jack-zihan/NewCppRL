@@ -28,6 +28,7 @@ class APFCalculator(RewardCalculator):
     def calculate(cls, env_state: EnvironmentState, coefficient: float,
                   config: EnvironmentConfig = None, **kwargs) -> float:
         """计算基于势场变化的奖励"""
+        if not config.use_apf: return 0
         agent_pos_info = env_state.get_info('agent_position')
         if len(agent_pos_info) <= 1 or 'map_dict' not in kwargs: return 0.0
 
@@ -89,7 +90,7 @@ class CppEnv(CppEnvBase):
     def _get_observation_channels(self) -> int:
         """v2环境的观察通道数：field, mist_inv, obstacle, weed, (trajectory)
         11月17日加上了overlap, time_series_coveraged_field"""
-        return 4 + int(self.config.use_trajectory) + 1 # time_series_coveraged_field去掉了
+        return 4 + 1 # time_series_coveraged_field去掉了 + int(self.config.use_trajectory)
 
         # return 4 + int(self.config.use_trajectory)
 
@@ -124,8 +125,8 @@ class CppEnv(CppEnvBase):
         """生成APF增强的观察地图"""
         # 提取原始地图
         field, obstacle, mist = self.maps_dict['field'], self.maps_dict['obstacle'], self.maps_dict['mist']
-        trajectory = self.maps_dict['trajectory'] if self.config.use_trajectory else np.zeros(
-            (self.env_state.dimensions))
+        # trajectory = self.maps_dict['trajectory'] if self.config.use_trajectory else np.zeros(
+        #     (self.env_state.dimensions))
 
         weed = self.maps_dict['weed_noisy'] if (self.config.weed_noise and self.np_random.uniform() < self.config.weed_noise) \
             else self.maps_dict['weed']
@@ -141,16 +142,16 @@ class CppEnv(CppEnvBase):
             obs_obstacle = self.get_discounted_apf(obstacle_edges, 3, pad=True)
             obs_obstacle = np.maximum(obs_obstacle, np.logical_and(obstacle, mist))
             obs_weed = self.get_discounted_apf(weed_filtered, 40, 1e-2) # 原版40
-            obs_trajectory = self.get_discounted_apf(trajectory, 4) if self.config.use_trajectory else trajectory
+            # obs_trajectory = self.get_discounted_apf(trajectory, 4) if self.config.use_trajectory else trajectory
         else:
             obs_field = field_edges.astype(float)
             obs_obstacle = obstacle_edges.astype(float)
             obs_weed = weed_filtered.astype(float)
-            obs_trajectory = trajectory.astype(float)
+            # obs_trajectory = trajectory.astype(float)
 
         # 组装观察数组供奖励计算
         layers = [obs_field, np.logical_not(mist).astype(float), obs_obstacle, obs_weed]
-        if self.config.use_trajectory: layers.append(obs_trajectory)
+        # if self.config.use_trajectory: layers.append(obs_trajectory)
 
         # 保存APF数组供奖励计算
         self.maps_dict['apf'] = np.stack(layers, axis=0) if self.config.use_apf else None
@@ -162,8 +163,8 @@ class CppEnv(CppEnvBase):
             'obstacle': {'map': obs_obstacle, 'pad': 1.0},
             'weed': {'map': obs_weed, 'pad': 0.0},
         }
-        if self.config.use_trajectory:
-            obs_maps['trajectory'] = {'map': obs_trajectory, 'pad': 0.0}
+        # if self.config.use_trajectory:
+        #     obs_maps['trajectory'] = {'map': obs_trajectory, 'pad': 0.0}
 
         # 重复覆盖热图：归一化到[0,1]，上限由overlap_tolerance控制（对应当前阶段的冗余预算R*）
         normalized_overlap = (np.clip(self.maps_dict['overlap'] + 1, 0, self.config.overlap_tolerance + 1)
@@ -194,7 +195,7 @@ if __name__ == "__main__":
         # num_obstacles_range = [0, 0]
         # map_dir = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
         # map_dir = "envs_new/maps/indoor_coverage",
-        boundary_source = "field"
+        # boundary_source = "field"
     )
     # Note: HumanRendering wrapper would be added here if available
     if if_render: env: CppEnv = HumanRendering(env)  # 封装后，只接收render_mode="rgb_array"的env，使得step和reset的时候展示渲染图像

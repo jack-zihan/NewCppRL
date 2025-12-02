@@ -248,7 +248,9 @@ def main(cfg: DictConfig):
                             torch.compiler.cudagraph_mark_step_begin()
                             loss_td, step_taken = update_fn(sampled_td)
                         losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha").detach().to("cpu")
-                        replay_buffer.update_tensordict_priority(sampled_td)
+                        priority_td = sampled_td.select("index", replay_buffer.priority_key).detach().to("cpu")
+                        replay_buffer.update_tensordict_priority(priority_td)
+                        # replay_buffer.update_tensordict_priority(sampled_td)
                         if schedule[state.idx].type == 'PRETRAIN' and step_taken:
                             state = replace(state, pretrain_updates=state.pretrain_updates + 1)
 

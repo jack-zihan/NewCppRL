@@ -433,7 +433,7 @@ def main():
         'visualization_figsize': (12, 9),  # Adjustable window size (width, height in inches)
         
         # Model path
-        'model_path': '/home/lzh/NewCppRL/ckpt/sac_cont/final_t[01700]_r[2741.21=2632.53~2847.21].pt',
+        'model_path': '/home/lzh/NewCppRL/ckpt/sac_cont/202400915-finetune/t[01700]_r[2741.21=2632.53~2847.21].pt',
         
         # Environment reset options
         'env_reset_options': {

@@ -33,9 +33,9 @@ env:
     use_trajectory: true
     use_mist: true
 
-    state_size: [256, 256]
-    state_downsize: [256, 256]
-    multiscale_feature_size: 32
+#    state_size: [256, 256]
+#    state_downsize: [256, 256]
+#    multiscale_feature_size: 32
 
 
 

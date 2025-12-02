@@ -18,6 +18,7 @@ from asyncio import current_task
 
 import cv2
 import numpy as np
+from cpu_fov import cpu_fov_bool
 from typing import Dict, Tuple, Union, List, Any
 import math
 
@@ -69,15 +70,11 @@ class FieldExplorationUpdater(Updater):
         """更新田地地图并记录状态变化"""
         maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
 
-        # 使用椭圆桇形模拟机器人视野，将覆盖过的区域设为0（已覆盖）
         if 'field' in maps_dict:
-            cv2.ellipse(img=maps_dict['field'],
-                        center=agent.position_discrete,  # 椭圆中心：机器人位置
-                        axes=(int(agent.vision_length), int(agent.vision_length)),  # 长短轴：视野范围
-                        angle=float(agent.direction),  # 旋转角度：机器人朝向
-                        startAngle=float(-agent.vision_angle / 2), endAngle=float(agent.vision_angle / 2),  # 扇形起始角和结束角
-                        color=(0,), thickness=-1  # 填充为0（已覆盖，-1表示实心填充
-                        )
+            # 根据agent位姿、感知能力和obstacle计算fov
+            fov = cpu_fov_bool(maps_dict['obstacle'], agent.x, agent.y, agent.direction,
+                               agent.vision_length, agent.vision_angle, 180)  # num_rays: 视野内发射的碰撞检测射线数
+            maps_dict['field'][fov.astype(bool)] = 0
 
             # 记录状态变化
             new_field_area = int(maps_dict['field'].sum())
@@ -144,7 +141,7 @@ class FieldCoverageUpdater(FieldExplorationUpdater):
         if 'original_field' in maps_dict and 'time_series_coveraged_field' in maps_dict:
             # 覆盖顺序秩标签：为"本步新覆盖"(原始为田地、当前已覆盖、且尚未标记秩)的像素写入递增标签（稳定秩，不随时间重标定）
             new_coverage_mask = (maps_dict['original_field'] == 1) & (maps_dict['field'] == 0) & (
-                        maps_dict['time_series_coveraged_field'] == 0)
+                    maps_dict['time_series_coveraged_field'] == 0)
             if np.any(new_coverage_mask):
                 next_coverage_label = int(env_state.get_static_info('coverage_order_next_label')) + 1
                 maps_dict['time_series_coveraged_field'][new_coverage_mask] = next_coverage_label
@@ -185,13 +182,16 @@ class MistUpdater(Updater):
         """更新雾效地图可见性"""
         maps_dict, agent = state['maps_dict'], state['agent']
 
-        if 'mist' in maps_dict:
-            # 在agent当前视野范围内清除雾效（设为1表示已探索）
-            cv2.ellipse(img=maps_dict['mist'], center=agent.position_discrete,
-                        axes=(int(agent.vision_length + 1), int(agent.vision_length + 1)),
-                        startAngle=float(-agent.vision_angle / 2), endAngle=float(agent.vision_angle / 2),
-                        angle=float(agent.direction), color=(1,), thickness=-1)
+        if 'mist' in maps_dict: # 根据agent位姿、感知能力和obstacle计算fov
+            fov = cpu_fov_bool(maps_dict['obstacle'], agent.x, agent.y, agent.direction,
+                               agent.vision_length+1, agent.vision_angle, 180)  # num_rays: 视野内发射的碰撞检测射线数
+            maps_dict['mist'][fov.astype(bool)] = 1  # 雾效地图中，1表示可见区域
 
+            # #在agent当前视野范围内清除雾效（设为1表示已探索）
+            # cv2.ellipse(img=maps_dict['mist'], center=agent.position_discrete,
+            #             axes=(int(agent.vision_length + 1), int(agent.vision_length + 1)),
+            #             startAngle=float(-agent.vision_angle / 2), endAngle=float(agent.vision_angle / 2),
+            #             angle=float(agent.direction), color=(1,), thickness=-1)
 
 class TrajectoryUpdater(Updater):
     """轨迹记录更新器"""
@@ -290,7 +290,7 @@ class CoverageOverlapUpdater(Updater):
         """更新重复覆盖统计"""
         maps_dict, agent, env_state = state['maps_dict'], state['agent'], state['env_state']
 
-        current_front = agent.extended_convex_hull.round().astype(np.int32)[[0, 3], :] # 获取当前前沿端点（索引0=前下角, 索引3=前上角）
+        current_front = agent.extended_convex_hull.round().astype(np.int32)[[0, 3], :]  # 获取当前前沿端点（索引0=前下角, 索引3=前上角）
         env_state.update_state(front_points=current_front)  # 更新前沿端点历史（必须要在获取前先存入，否则数据可能不足）
 
         # 获取上一帧前沿端点，构造前沿扫过的四边形（逆时针闭合 P0 前下角 P3 前上角）
@@ -408,7 +408,8 @@ class EnvironmentDynamics:
             agent.set_position(safe_x, safe_y)
 
         # 构建统一的state字典
-        state = {'maps_dict': maps_dict, 'agent': agent, 'env_state': env_state,'config': self.config}  # 传递config以供updater使用
+        state = {'maps_dict': maps_dict, 'agent': agent, 'env_state': env_state,
+                 'config': self.config}  # 传递config以供updater使用
 
         # 初始化所有updater的状态（传递state而不是只有env_state）
         for name in self._updaters:

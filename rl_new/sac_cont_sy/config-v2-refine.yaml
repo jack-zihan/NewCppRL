@@ -30,7 +30,7 @@ env:
 
     # v2 环境特有参数
     use_apf: true
-    use_trajectory: true
+    use_trajectory: false
     use_mist: true
 
     # 观察配置（多尺度 + 全局）

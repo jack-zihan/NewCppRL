@@ -20,6 +20,11 @@ ext_modules = [
         # Example: passing in the version to the compiled code
         define_macros=[("VERSION_INFO", __version__)],
     ),
+    Pybind11Extension(
+        "cpu_fov",
+        ["src/cpu_fov.cpp"],
+        define_macros=[("VERSION_INFO", __version__)],
+    ),
 ]
 
 setup(
