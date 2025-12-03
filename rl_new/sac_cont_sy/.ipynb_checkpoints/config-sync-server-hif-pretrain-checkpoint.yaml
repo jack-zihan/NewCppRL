@@ -1,0 +1,174 @@
+# SAC 同步训练（带 HIF 预训练）配置
+
+in_server: False
+pretrained_model: "/root/NewCppRL/rl_new/sac_cont_sy/outputs/HIF_v6/2025-11-17/00-52-27/checkpoints/model_step00150000_eval_pending.pt" #null
+seed: 42
+
+model:
+  architecture: "resnet"
+  backbone: "resnet18"
+
+env:
+  env_id: "NewPasture-v6"  # 预训练默认在v6（HIF引导但不直接观测），也可改为v5
+  env_kwargs:
+    render_repeat_times: 1
+    # 下面的值无效，课程学习动态参数（初始值来自S1阶段，运行时会被schedule[0]覆盖）
+    reward_field_group_coef: 1.0
+    reward_turning_group_coef: 0.5
+    reward_overlap_penalty: -0.20
+    overlap_tolerance: 5.0
+    field_scale_enabled: true
+    field_scale_range: [0.5, 0.6]
+    use_trajectory: false
+
+collector:
+  total_frames: 12_000_000
+  frames_per_batch: 20
+  init_random_frames: 50_000
+  env_per_collector: 1
+  num_collectors: 16 #32
+  pin_memory: true
+
+training:
+  device: cuda:0
+  use_amp: false #True
+  grad_accum_steps: 4
+  total_updates: 1_000_000
+
+buffer:
+  buffer_size: 250_000
+  batch_size: 256 # 512 #2048
+  pin_memory: false
+  prefetch: 10
+  temp_dir: "/mnt/data/rl_temp_data"
+  shared_memory: True
+  bucketed: true
+  bucket_capacity_ratio: [0.25, 0.25, 0.50]
+  success_threshold: 0.99
+  near_end_threshold: 0.90
+  alpha: 0.7
+  beta: 0.5
+
+optim:
+  lr_actor: 1.0e-5
+  weight_decay_actor: 1.0e-4
+  eps_actor: 1.0e-8
+  lr_critic: 3.0e-4
+  weight_decay_critic: 0
+  eps_critic: 1.0e-8
+  lr_alpha: 3.0e-4
+  weight_decay_alpha: 0
+  eps_alpha: 1.0e-8
+  max_grad_norm: 1.0
+
+loss:
+  gamma: 0.99
+  n_steps: 12
+  target_update_polyak: 0.9997
+  target_entropy_weight: 0.2
+  target_entropy: "auto"
+  utd_ratio: 1
+  loss_function: l2
+  alpha_init: 1.0
+
+hif:
+  # 预训练阶段（新增，全部为必填）
+  pretrain:
+    enabled: true
+    min_buffer_frames: 16384       # 至少积累这么多帧后开始预训练
+    max_updates: 2500 #10000             # 仅HIF更新的总步数
+    actor_lr: 3.0e-4               # 预训练期间的学习率（覆盖所有param group或至少actor组）
+    loss_weight: 1.0               # 预训练HIF损失权重
+    reset_optimizer_after: false   # 阶段切换后是否重建优化器（默认关闭）
+
+  enabled: true
+  decoder_type: "full" # "skip" "low_weight" "full"
+  initial_weight: 1.0
+  tv_weight: 1.0e-5
+  use_tv: true
+  weights:
+    S1: 0.2
+    S2: 0.1
+    S3: 0.04
+  env_strategy:
+    v4: "full"
+    v5: "full"
+    v6: "full"
+    v5_weight: 0.05
+  online_auxiliary: true
+  update_frequency: 1
+  log_metrics: true
+  log_interval: 100
+  visualize: true
+  vis_interval: 1000
+
+compile:
+  enable: false
+  mode: "default"
+  warmup: 8
+  cudagraphs: false
+
+logger:
+  mode: online
+  backend: wandb
+  project_name: SAC_2025_HIF
+  group_name: HIF
+  exp_name: HIF_v6
+  model_name: ContinuousSAC
+  eval_worker: 1
+  eval_interval: 50_000
+  eval_episodes: 4
+  eval_max_steps: 3600
+  eval_video: true
+  eval_video_skip: 25
+  eval_device: cpu
+  show_progress: true
+
+curriculum:
+  enabled: true
+  stages:
+    # S1: 探索阶段 - 小地图，高容错，学习基础覆盖
+    - name: S1
+      min_completion: 0.90
+      consecutive_k: 3
+      reward_field_group_coef: 1.0
+      reward_turning_group_coef: 0.5
+      reward_overlap_penalty: -0.20  # = 1.0/5 → R*=5（探索阶段：容忍5次重访）
+      overlap_tolerance: 5.0  # 观测归一化上限 = R*
+      sampling_ratio: [0.40, 0.30, 0.30]
+      field_scale_enabled: true
+      field_scale_range: [0.5, 0.6]
+
+    # S2: 效率阶段 - 中地图，加稳定性检查
+    - name: S2
+      min_completion: 0.95
+      consecutive_k: 5
+      stability_tolerance: 0.05
+      reward_field_group_coef: 0.5
+      reward_turning_group_coef: 0.2
+      reward_overlap_penalty: -0.25  # = 0.5/2 → R*=2（效率阶段：容忍2次重访）
+      overlap_tolerance: 2.0
+      sampling_ratio: [0.30, 0.30, 0.40]
+      field_scale_enabled: true
+      field_scale_range: [0.6, 0.8]
+
+    # S3: 优化阶段 - 全尺寸地图，终态
+    - name: S3
+      min_completion: 0.97
+      consecutive_k: 5
+      stability_tolerance: 0.03
+      reward_field_group_coef: 0.10
+      reward_turning_group_coef: 0.05
+      reward_overlap_penalty: -0.10  # = 0.1/1 → R*=1（优化阶段：要求1:1完美效率）
+      overlap_tolerance: 1.0
+      sampling_ratio: [0.20, 0.30, 0.50]
+      field_scale_enabled: true
+      field_scale_range: [1.0, 1.0]
+
+# ============ 1.3版本hydra, 提高效率自定义输出地址 ============
+hydra:
+  job:
+     chdir: true # 保持1.1行为
+  run:
+     dir: outputs/${logger.exp_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+

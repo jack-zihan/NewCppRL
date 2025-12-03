@@ -143,7 +143,7 @@ logger:
   show_progress: true
 
 curriculum:
-  enabled: true              # 启用课程学习（切换条件内聚到各阶段配置）
+  enabled: false #true              # 启用课程学习（切换条件内聚到各阶段配置）
   stages:
     - name: S1  # 第一阶段：基础探索学习
       # 切换条件（内聚到阶段配置）

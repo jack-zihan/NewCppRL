@@ -1,0 +1,181 @@
+# SAC训练配置 - 同步版本 (sy)
+# 支持Hydra命令行覆盖和环境选择
+
+# 基础配置
+pretrained_model: null
+seed: 42
+in_server: False #True
+
+# ============ 环境配置 ============
+env:
+  env_id: "NewPasture-v2"  # 可选: NewPasture-v1, v2, v3, v4, v5
+  env_kwargs: # 环境特定参数（可选）
+    render_repeat_times: 1 # 确保渲染图片不放大是小图 400*400
+    
+# ============ 数据收集配置 ============
+collector:
+  total_frames: 4_000_000 #100_000 # 4_000_000 尝试保持小数据池只保留最新有效数据
+  frames_per_batch: 20 #32 #20 #20  # 同步模式使用较小批次
+  init_random_frames: 50_000 # 50_000  # 减少初始随机帧
+  env_per_collector: 1 #32 #100 # 16
+  num_collectors: 32 # 8 #16
+
+  # 性能优化
+  pin_memory: true        # 锁定内存，加速GPU传输
+
+# ============ 训练配置 ============
+training:
+  device: cuda:0          # 训练使用的GPU（收集器会自动排除此GPU）
+  use_amp: False # true          # 混合精度训练（适合0-1掩码和浮点APF混合数据）
+  total_updates: 1_000_000  # 总训练更新次数（与收集帧数独立）
+
+# ============ 回放缓冲区 ============
+buffer:
+  buffer_size: 500_000 # 100_000 # Small buffer size to keep only recent elements
+  batch_size: 2048 #1024  # 同步模式使用较小批次
+  pin_memory: false #true # 锁定内存优化, 可能导致pin的内存不能及时释放导致内存逐步上升，尝试关闭
+  prefetch: 10 # 3            # 同步模式减少预取, 异步模式设置共享内存则不能prefetch, 只有在非桶缓冲池下有效，桶缓冲池要求为0
+  temp_dir: "~/rl_temp_train_data"  # 临时文件夹，避免网络文件系统瓶颈
+#  temp_dir: "~/rl_temp_field_train_data"
+  shared_memory: True #true    # 使用共享内存提升性能
+  bucketed: true               # 启用分桶混采（成功/临近/中段）
+  bucket_capacity_ratio: [0.25, 0.25, 0.50]
+  success_threshold: 0.99      # 成功分桶的完成率阈值
+  near_end_threshold: 0.90     # 接近结束分桶的完成率阈值
+  alpha: 0.7                   # 优先经验回放的优先级指数
+  beta: 0.5                    # 优先经验回放的重要性采样指数
+
+# ============ 优化器配置 ============
+optim:
+  # Actor学习率（保持原始配置）
+  lr_actor: 1.0e-5
+  weight_decay_actor: 1.0e-4
+  eps_actor: 1.0e-8
+
+  # Critic学习率
+  lr_critic: 3.0e-4
+  weight_decay_critic: 0
+  eps_critic: 1.0e-8
+
+  # Alpha学习率
+  lr_alpha: 3.0e-4
+  weight_decay_alpha: 0
+  eps_alpha: 1.0e-8
+
+  # 梯度裁剪
+  max_grad_norm: 1.0 #null    # null表示不裁剪，建议设置为1.0或10.0
+
+# ============ 损失函数配置 ============
+loss:
+  gamma: 0.99
+  n_steps: 12             # n步回报的步数（1=标准SAC，3-5=n-step SAC）
+  target_update_polyak: 0.9997 # 0.995
+  target_entropy_weight: 0.2
+  target_entropy: "auto"
+  utd_ratio: 1            # 同步模式通常使用1:1比率
+  loss_function: l2
+  alpha_init: 1.0
+
+# ============ HIF辅助任务配置 ============
+hif:
+  enabled: true           # 是否启用HIF预测辅助任务
+  decoder_type: "full"      # HIF解码器类型: "two_stage" (1M参数) 或 "full" (2M参数)
+  initial_weight: 1.0            # 初始HIF权重（强监督阶段）
+
+  # 损失函数配置（HIFReconstructionLoss参数）
+  # 使用余弦相似度 + 置信度加权 + TV正则（符合轴向场数学性质）
+  tv_weight: 1.0e-5               # TV正则化权重（鼓励空间平滑性）
+  use_tv: true                    # 是否启用TV正则
+
+  # 各阶段HIF loss权重（绝对值，作为SAC loss的正则项系数）
+  weights:
+    S1: 0.2                     # S1阶段：强化编码器学习
+    S2: 0.1                     # S2阶段：平衡主辅任务
+    S3: 0.04                    # S3阶段：RL主导，弱辅助
+
+  # 环境适配策略
+  env_strategy:
+    v4: "skip"                  # v4环境策略: "skip" (无HIF)
+    v5: "low_weight"            # v5环境策略: "low_weight" (避免抄作业) 或 "skip"
+    v6: "full"                  # v6环境策略: "full" (完全启用)
+    v5_weight: 0.05             # v5环境的特殊权重
+
+  # 在线辅助训练
+  online_auxiliary: true        # 使用在线辅助（不存入replay buffer）
+  update_frequency: 1           # 每N个batch更新一次HIF（1=每次都更新）
+
+  # 监控与日志
+  log_metrics: true             # 记录HIF相关指标
+  log_interval: 100             # 每N步记录一次
+  visualize: true               # 是否可视化HIF预测
+  vis_interval: 1000            # 每N步可视化一次
+
+# ============ 编译优化（借鉴官方SAC） ============
+compile:
+  enable: false #true # true           # 启用torch.compile（5-10x加速）
+  mode: # reduce-overhead  # 编译模式：default, reduce-overhead, max-autotune
+  warmup: 2             # compile_with_warmup的预热步数
+  cudagraphs: false #true # true       # 启用CudaGraph（额外2x加速，需要PyTorch 2.0+）
+
+# ============ 日志配置 ============
+logger:
+  mode: online          # online, offline
+  backend: wandb        # wandb, tensorboard, null
+  project_name: SAC_2025
+  group_name: Weed
+  exp_name: Weed_v2_Recovery-Sync-New-Code
+  model_name: ContinuousSAC
+
+  # 详细评估配置
+  eval_worker: 1
+  eval_interval: 50_000 # 25_000   # 评估频率（帧数）
+  eval_episodes: 9        # 每次评估4个episode（更稳定的统计）
+  eval_max_steps: 5000 #10000   # 每个episode最大步数
+  eval_video: true       # 录制2x2网格视频
+  eval_video_skip: 25     # 视频跳帧（减小文件大小）
+  eval_device: cpu   # 评估使用的设备
+  show_progress: true
+
+# ============ 课程学习 ============
+curriculum:
+  enabled: true
+  s1_consecutive_k: 3  # S1->S2 连续达标次数（完成率≥90%）
+  s2_consecutive_k: 5  # S2->S3 连续稳定次数 (完成率>=95% & ratio95变化率<5%)
+  s2s3_threshold: 0.05  # S2->S3 相对变化阈值（ratio95变化率<5%视为稳定）
+  s1_min_completion: 0.90 # 进入S2前整体完成率必须超过该阈值
+  s2_min_completion: 0.95  # 进入S3前整体完成率必须超过该阈值
+  stages:
+    - name: S1
+      reward_field_group_coef: 1.0
+      reward_turning_group_coef: 0.5
+      reward_overlap_penalty: -0.20  # = 1.0/5 → R*=5（探索阶段：容忍5次重访）
+      overlap_tolerance: 5.0  # 观测归一化上限 = R*，观测值1.0表示达到breakeven阈值
+      sampling_ratio: [0.40, 0.30, 0.30]
+      # 课程：田地面积缩放（易→难），缩放到原图的30%-50%
+      field_scale_enabled: true
+      field_scale_range: [0.5, 0.6]
+    - name: S2
+      reward_field_group_coef: 0.5
+      reward_turning_group_coef: 0.2
+      reward_overlap_penalty: -0.25  # = 0.5/2 → R*=2（效率阶段：容忍2次重访）
+      overlap_tolerance: 2.0  # 观测归一化上限 = R*
+      sampling_ratio: [0.30, 0.30, 0.40]
+      # 课程：中等规模（50%-80%）
+      field_scale_enabled: true
+      field_scale_range: [0.6, 0.8]
+    - name: S3
+      reward_field_group_coef: 0.10
+      reward_turning_group_coef: 0.05
+      reward_overlap_penalty: -0.10  # = 0.1/1 → R*=1（优化阶段：要求1:1完美效率）
+      overlap_tolerance: 1.0  # 观测归一化上限 = R*
+      sampling_ratio: [0.20, 0.30, 0.50]
+      # 课程：完整规模（100%）
+      field_scale_enabled: true
+      field_scale_range: [1.0, 1.0]
+
+# ============ 1.3版本hydra, 提高效率自定义输出地址 ============
+hydra:
+  job:
+     chdir: true  # 保持1.1行为
+  run:
+     dir: outputs/${logger.exp_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
