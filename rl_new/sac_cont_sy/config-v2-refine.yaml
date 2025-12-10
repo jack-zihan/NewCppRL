@@ -5,7 +5,7 @@ seed: 42
 in_server: False
 
 model:
-  architecture: "resnet"   # 可改为 "resnet"
+  architecture: "cnn" #"resnet"   # 可改为 "resnet" 先跑一次快速，验证验证的奖励是否OK
   backbone: "resnet18"
 
 env:
@@ -17,13 +17,18 @@ env:
     reward_base_penalty: -0.10
     reward_field_group_coef: 0.05
     reward_turning_group_coef: 0.0
-    reward_overlap_penalty: 0.0
+    reward_overlap_penalty: 0.03 # indoor
     reward_completion_bonus: 100.0
     reward_apf: 1.0
     overlap_tolerance: 1.0
+    boundary_source: "field"
+    agent_width: 2.0 # indoor
+    agent_length: 3.0 # indoor
 
     # 地图与课程参数默认值（可被阶段覆盖）
-    map_dir: "envs_new/maps/weed_coverage"
+    # map_dir: "envs_new/maps/weed_coverage"
+    map_dir: "envs_new/maps/indoor_coverage"
+    
     field_scale_enabled: false
     field_scale_range: [1.0, 1.0]
     num_obstacles_range: [0, 0]
@@ -43,7 +48,7 @@ collector:
   frames_per_batch: 20
   init_random_frames: 50_000
   env_per_collector: 1
-  num_collectors: 32
+  num_collectors: 24 #32
   pin_memory: true
 
 training:
@@ -54,10 +59,10 @@ training:
 
 buffer:
   buffer_size: 500_000
-  batch_size: 512 #2048
+  batch_size: 512 #2048 indoor
   pin_memory: false
   prefetch: 2
-  temp_dir: "/mnt/data/rl_temp_data"
+  temp_dir: "/root/autodl-tmp/rl_temp_train_data"
   shared_memory: True
   bucketed: false
   bucket_capacity_ratio: [0.25, 0.25, 0.50]
@@ -153,7 +158,7 @@ curriculum:
       reward_base_penalty: -0.10
       reward_field_group_coef: 0.05
       reward_turning_group_coef: 0.0
-      reward_overlap_penalty: 0.0
+      reward_overlap_penalty: 0.03 # indoor
       reward_completion_bonus: 100.0
       reward_apf: 1.0
       overlap_tolerance: 1.0

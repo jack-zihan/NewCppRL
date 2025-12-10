@@ -47,7 +47,7 @@ torch.set_float32_matmul_precision("high")
 tensordict.nn.functional_modules._exclude_td_from_pytree().set()
 
 
-@hydra.main(version_base="1.1", config_path="", config_name="config-v2-refine") # "config-sync-server-hif-v2"
+@hydra.main(version_base="1.1", config_path="", config_name="config-sync-server-hif-v2") # "config-sync-server-hif-v2" "config-v2-refine"
 def main(cfg: DictConfig):
     # ============ 1. 临时实验目录和基础设置 ============
     temp_dir = cfg.buffer.temp_dir

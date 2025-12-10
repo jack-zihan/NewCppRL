@@ -42,7 +42,7 @@ env:
 
 
 collector:
-  total_frames: 10_000_000
+  total_frames: 4_000_000
   frames_per_batch: 20
   init_random_frames: 50_000
   env_per_collector: 1
@@ -59,11 +59,11 @@ buffer:
   buffer_size: 500_000
   batch_size: 2048
   pin_memory: false
-  prefetch: 2 #10               # 仅在非分桶回放下生效
-  temp_dir: "/mnt/data/rl_temp_data"
+  prefetch: 3 #10               # 仅在非分桶回放下生效
+  temp_dir: "/root/autodl-tmp/rl_temp_train_data"
   shared_memory: True
   bucketed: false            # 关闭分桶：与原 sac.py 对齐
-  bucket_capacity_ratio: [0.2, 0.3, 0.5] #[0.25, 0.25, 0.50]
+  bucket_capacity_ratio: [0.25, 0.25, 0.50]
   success_threshold: 0.99
   near_end_threshold: 0.90
   alpha: 0.7
@@ -154,7 +154,7 @@ curriculum:
       # 奖励配置
       reward_field_group_coef: 0.125
       reward_turning_group_coef: 0.0
-      reward_overlap_penalty: 0.1
+      reward_overlap_penalty: 0.0
       overlap_tolerance: 5.0
       sampling_ratio: [0.34, 0.33, 0.33]
       field_scale_enabled: false
