@@ -13,9 +13,11 @@ env:
   env_id: "NewPasture-v2"
   env_kwargs:
     # 核心奖励参数（与 curriculum.stages[0] 保持一致）
-    reward_field_group_coef: 0.125
-    reward_turning_group_coef: 0.0
-    reward_overlap_penalty: 0.0
+    reward_base_penalty: 0.2
+    reward_field_group_coef: 0.5
+    reward_apf: 10.0
+    reward_turning_group_coef: 0.02
+    reward_overlap_penalty: 0.5
     overlap_tolerance: 1.0
 #    map_dir: "envs_new/maps/indoor_coverage"
     map_dir: "envs_new/maps/weed_coverage"
@@ -61,7 +63,7 @@ buffer:
   temp_dir: "/mnt/data/rl_temp_data"
   shared_memory: True
   bucketed: false            # 关闭分桶：与原 sac.py 对齐
-  bucket_capacity_ratio: [0.25, 0.25, 0.50]
+  bucket_capacity_ratio: [0.2, 0.3, 0.5] #[0.25, 0.25, 0.50]
   success_threshold: 0.99
   near_end_threshold: 0.90
   alpha: 0.7
@@ -132,7 +134,7 @@ logger:
   group_name: Weed
   exp_name: Weed_v2_Optimized
   model_name: ContinuousSAC
-  eval_worker: 1
+  eval_worker: 4
   eval_interval: 50_000
   eval_episodes: 9
   eval_max_steps: 3600
@@ -142,7 +144,7 @@ logger:
   show_progress: true
 
 curriculum:
-  enabled: true              # 启用课程学习（切换条件内聚到各阶段配置）
+  enabled: false              # 启用课程学习（切换条件内聚到各阶段配置）
   stages:
     - name: S1  # 第一阶段：基础探索学习
       # 切换条件（内聚到阶段配置）

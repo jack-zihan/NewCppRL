@@ -184,7 +184,7 @@ class MistUpdater(Updater):
 
         if 'mist' in maps_dict: # 根据agent位姿、感知能力和obstacle计算fov
             fov = cpu_fov_bool(maps_dict['obstacle'], agent.x, agent.y, agent.direction,
-                               agent.vision_length+1, agent.vision_angle, 180)  # num_rays: 视野内发射的碰撞检测射线数
+                               agent.vision_length+3, agent.vision_angle, 180)  # num_rays: 视野内发射的碰撞检测射线数
             maps_dict['mist'][fov.astype(bool)] = 1  # 雾效地图中，1表示可见区域
 
             # #在agent当前视野范围内清除雾效（设为1表示已探索）

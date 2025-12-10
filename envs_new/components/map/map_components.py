@@ -267,20 +267,22 @@ class ObstacleCreator:
 
     def _is_valid_placement(self, obstacle: np.ndarray, agent_position: Tuple[float, float],
                             existing_obstacles: np.ndarray, agent_length: float, config) -> bool:
-        """检查障碍物放置是否有效"""
-        center = obstacle.mean(axis=0)[0]
-        center_int = (int(center[1]), int(center[0]))  # 使用int()进行网格索引（floor操作），获取中心所在的网格
+        """检查障碍物放置是否有效：1.与已有障碍物间距足够 2.与agent距离足够"""
+        # 检查与已有障碍物的间距（使用形态学膨胀创建禁止区域）
+        if existing_obstacles.any():
+            min_gap = config.obstacle_min_gap
+            if min_gap > 0:
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (min_gap * 2 + 1, min_gap * 2 + 1))
+                forbidden_zone = cv2.dilate(existing_obstacles, kernel, iterations=1)
 
-        # 中心位置越界或者中心位置在已有障碍物，则无效
-        if (0 <= center_int[0] < existing_obstacles.shape[0] and 0 <= center_int[1] < existing_obstacles.shape[1]
-                and existing_obstacles[center_int]):
-            return False
+                new_obstacle_mask = np.zeros_like(existing_obstacles)
+                cv2.fillPoly(new_obstacle_mask, [obstacle], 1)
+                if np.any(new_obstacle_mask & forbidden_zone): return False
 
-        # cv2.pointPolygonTest测点在多边形内部的距离，为负则表示点在多边形外部，要求大于两倍agent_lenth
+        # 检查与agent的距离（点在多边形外部时返回负值）
         agent_x, agent_y = agent_position
-        distance_to_agent = - cv2.pointPolygonTest(obstacle, (agent_x, agent_y), True)
+        distance_to_agent = -cv2.pointPolygonTest(obstacle, (agent_x, agent_y), True)
         min_distance = config.obstacle_min_distance_to_agent * agent_length
-
         return distance_to_agent > min_distance
 
     def _generate_boundary(self, bounding_box: List[np.ndarray],

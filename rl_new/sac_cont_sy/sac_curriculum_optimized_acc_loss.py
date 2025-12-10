@@ -88,7 +88,7 @@ def main(cfg: DictConfig):
         schedule = build_training_schedule(cfg)
         state = ScheduleState(idx=0)
         # 将首阶段的环境参数注入（PRETRAIN 已复制下一阶段参数）
-        if schedule[0].env_params:
+        if cfg.curriculum.enabled and schedule[0].env_params:
             cfg.env.env_kwargs.update(schedule[0].env_params)
             # torchrl_logger.info(f"学习环境数据: {cfg.env.env_kwargs.map_dir} , 障碍 {cfg.env.env_kwargs.num_obstacles_range}")
 
@@ -248,7 +248,10 @@ def main(cfg: DictConfig):
                             torch.compiler.cudagraph_mark_step_begin()
                             loss_td, step_taken = update_fn(sampled_td)
                         losses[i] = loss_td.select("loss_actor", "loss_qvalue", "loss_alpha").detach().to("cpu")
-                        priority_td = sampled_td.select("index", replay_buffer.priority_key).detach().to("cpu")
+                        if cfg.buffer.bucketed:
+                            priority_td = sampled_td.select("index", replay_buffer.priority_key, "bucket_id").detach().to("cpu")
+                        else:
+                            priority_td = sampled_td.select("index", replay_buffer.priority_key).detach().to("cpu")
                         replay_buffer.update_tensordict_priority(priority_td)
                         # replay_buffer.update_tensordict_priority(sampled_td)
                         if schedule[state.idx].type == 'PRETRAIN' and step_taken:

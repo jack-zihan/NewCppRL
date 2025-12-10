@@ -57,7 +57,7 @@ class BucketedTensorDictPrioritizedReplayBuffer:
         self._init_bucket(BucketId.SUCCESS, capacity_success)
         self._init_bucket(BucketId.NEAR_END, capacity_near)
         self._init_bucket(BucketId.MID, capacity_mid)
-
+        self.priority_key = "td_error"
 
 
     # ------------- initialization helpers -------------

@@ -85,11 +85,7 @@ def extract_ego_patch(maps: np.ndarray, pad_values: List[float],
     rotation_center = (diagonal_length, diagonal_length)
     rotation_matrix = cv2.getRotationMatrix2D(rotation_center, rotation_angle, 1.0)
     
-    rotated_maps = cv2.warpAffine(
-        cropped_maps,
-        rotation_matrix,
-        (cropped_maps.shape[1], cropped_maps.shape[0])
-    )
+    rotated_maps = cv2.warpAffine(cropped_maps, rotation_matrix,(cropped_maps.shape[1], cropped_maps.shape[0]))
     
     # 确保为3D
     if rotated_maps.ndim == 2:

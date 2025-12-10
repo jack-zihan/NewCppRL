@@ -76,8 +76,8 @@ class ObservationGenerator:
         feature_size = self.config.multiscale_feature_size
 
         with torch.no_grad():
-            # 优雅的统一处理：生成4个尺度
-            for _ in range(4):
+            # 生成 n_scales 个尺度
+            for _ in range(self.config.n_scales):
                 # 从中心裁剪
                 half_size = feature_size // 2
                 cropped = obs_current[:,
@@ -105,8 +105,8 @@ class ObservationGenerator:
     def get_observation_shape(self, num_map_channels: int) -> Tuple[int, int, int]:
         """获取期望的观察形状 (C, H, W); Args: num_map_channels: 地图通道数   """
         if self.config.use_multiscale:
-            # 多尺度观察总是使用4个尺度
-            multiscale_channels = num_map_channels * 4
+            # 多尺度观察使用 n_scales 个尺度
+            multiscale_channels = num_map_channels * self.config.n_scales
             total_channels = multiscale_channels + num_map_channels if self.config.use_global_features else multiscale_channels
 
             return (total_channels, self.config.multiscale_feature_size, self.config.multiscale_feature_size)
@@ -119,12 +119,13 @@ class ObservationGenerator:
 
     def _validate_multiscale_config(self) -> None:
         """预验证多尺度配置的有效性"""
-        # 验证多尺度池化配置, 经过3次池化后的最小尺寸（第4次不需要裁剪中心）
-        min_size_after_pooling = self.config.state_downsize[0] // (2 ** 3)
+        # 验证多尺度池化配置, 经过 n_scales-1 次池化后的最小尺寸
+        n_pooling = self.config.n_scales - 1
+        min_size_after_pooling = self.config.state_downsize[0] // (2 ** n_pooling)
 
         if min_size_after_pooling < self.config.multiscale_feature_size:
             raise ValueError(f"多尺度配置无效：state_downsize={self.config.state_downsize[0]} "
-                             f"经过3次池化后尺寸为{min_size_after_pooling}，" f"小于feature_size={self.config.multiscale_feature_size}")
+                             f"经过{n_pooling}次池化后尺寸为{min_size_after_pooling}，" f"小于feature_size={self.config.multiscale_feature_size}")
 
         # 验证全局观察池化配置（如果启用）
         if self.config.use_global_features:

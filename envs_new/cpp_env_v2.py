@@ -195,7 +195,11 @@ if __name__ == "__main__":
         # num_obstacles_range = [0, 0]
         # map_dir = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
         # map_dir = "envs_new/maps/indoor_coverage",
-        # boundary_source = "field"
+        boundary_source = "field",
+        state_size = (512, 512),
+        state_downsize = (512, 512),
+        multiscale_feature_size = 16,
+        n_scales = 6,
     )
     # Note: HumanRendering wrapper would be added here if available
     if if_render: env: CppEnv = HumanRendering(env)  # 封装后，只接收render_mode="rgb_array"的env，使得step和reset的时候展示渲染图像

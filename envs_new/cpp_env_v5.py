@@ -415,7 +415,7 @@ class OrientationAwareObservationGenerator(ObservationGenerator):
 
         multiscale_features = []
         with torch.no_grad():
-            for _ in range(4):  # 生成4个尺度hif观测
+            for _ in range(self.config.n_scales):  # 生成 n_scales 个尺度hif观测
                 half_size = feature_size // 2
                 cropped = ego_hif_patch[0, :, center_size - half_size:center_size + half_size,
                           center_size - half_size:center_size + half_size]

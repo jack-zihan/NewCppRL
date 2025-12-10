@@ -34,9 +34,10 @@ class EnvironmentConfig:
     exclude_weeds_near_obstacles: bool = True
 
     # 场景生成参数
-    obstacle_expand_pixels: int = 15          # 障碍物周围不生成农田的像素数
+    obstacle_expand_pixels: int = 5 #15          # 障碍物周围不生成农田的像素数
     obstacle_min_distance_to_edge: int = 100  # 障碍物离地图边缘最小像素数
     obstacle_min_distance_to_agent: float = 2.0  # 障碍物离智能体最少几倍体长
+    obstacle_min_gap: int = 10               # 障碍物之间最小间距（像素），防止聚集分割田地
     boundary_expand_ratio: float = 1.2        # 障碍物边界扩展比例（1.2=扩大20%）
     boundary_min_expand_pixels: int = 60      # 边界最小扩展像素数
     weed_avoid_obstacle_pixels: int = 29      # 障碍物周围不生成杂草的像素数
@@ -56,12 +57,12 @@ class EnvironmentConfig:
     action_nvec: Tuple[int, int] = (7, 21)
     
     # 观察配置参数（原ObservationConfig）
-    state_size: Tuple[int, int] = (128, 128) # (256, 256) #(128, 128)
-    state_downsize: Tuple[int, int] = (128, 128) #(128, 128)
+    state_size: Tuple[int, int] = (512, 512) #(128, 128) # (256, 256) #(128, 128)
+    state_downsize: Tuple[int, int] = (512, 512)  #(128, 128) #(128, 128)
     use_multiscale: bool = True
-    n_scales: int = 4
+    n_scales: int = 6
     multiscale_feature_size: int = 16 # 16
-    use_global_features: bool = True #True
+    use_global_features: bool = False #True, global_features是基于base_observation的，因此暂时失效不用
     position_noise: float = 0.0
     direction_noise: float = 0.0
     
