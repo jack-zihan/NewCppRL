@@ -1,0 +1,34 @@
+env:
+  id: "NewPasture-v2"
+  base_kwargs:
+    state_size: [256, 256]
+    state_downsize: [256, 256]
+    action_type: "continuous"
+    use_trajectory: true
+    use_box_boundary: true
+    use_apf: true
+    use_mist: true
+    multiscale_feature_size: 32
+
+scenes:
+  weed_dists: ["gaussian"]
+  seeds: [25]
+  levels:
+    - name: "easy"
+      num_obstacles_range: [0, 0]
+      weed_num: 50
+      map_ids: [2]
+
+methods:
+  learning: []
+  rules:
+    - name: "JUMP"
+
+eval:
+  max_steps: 3000
+  L_thresholds: [0.9, 0.95, 0.98]
+  workers_learning: 1
+  workers_rules: 1
+  render_last_frame: true
+  output_root: "rules_new/outputs_eval_jump_debug"
+

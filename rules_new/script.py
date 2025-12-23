@@ -216,6 +216,8 @@ for seed in [25,27,47,21,31]:
                 weed_num = 50
                 run_all(seed, hard_degree, map_id, obstacle_range, weed_num)
                 
+                
+                
         elif hard_degree == "medium":
             for map_id in [4, 9, 21, 59, 80]:
                 obstacle_range = [2,4]

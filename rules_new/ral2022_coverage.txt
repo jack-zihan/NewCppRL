@@ -1,0 +1,834 @@
+IEEE ROBOTICS AND AUTOMATION LETTERS, VOL. 7, NO. 2, APRIL 2022
+
+5445
+
+Online Coverage Planning for an Autonomous Weed
+Mowing Robot With Curvature Constraints
+Parikshit Maini , Burak M. Gonultas , and Volkan Isler
+
+Abstract—The area used for grazing cattle constitutes about
+one-third of the land in United States. In this paper, we present
+the design of Cowbot, an autonomous weed mowing robot for
+maintaining cow pastures. Cowbot is designed to operate in rugged
+environments and provides a cost-effective method for weed control
+in cow pastures. Path planning for the Cowbot is challenging since
+weed distribution on pastures is unknown. Given an onboard sensor
+with a limited field of view, online planning is necessary to detect
+weeds and plan paths to mow them. We study the general online
+coverage planning problem for an autonomous mower with curvature and field of view constraints. We develop two algorithms that
+are able to utilize new information on weed detection to optimize
+path length and ensure coverage. We deploy our algorithms on the
+Cowbot and perform field experiments to validate the suitability of
+our methods for real-time path planning. We also perform extensive
+simulation experiments which show that our algorithms result in
+up to 60% reduction in path length as compared to boustrophedon
+and random-search based coverage paths.
+Index Terms—Agricultural automation, field robots, motion and
+path planning, nonholonomic motion planning.
+
+I. INTRODUCTION
+AIRY pastures constitute about one third of the land in
+the United States [1]. A single dairy farm averages around
+460 acres. Maintaining these large pastures to prevent weeds
+from taking over the nutritious grasslands is a daunting task,
+especially in organic farms that do not use herbicides. Many
+recent projects have developed robotic weeding solutions for
+outdoor [2]–[5] and indoor (greenhouse) [6], [7] weed control
+applications in agriculture. However, robotic weed removal efforts to-date have primarily focused on crop-cultivating farms
+that practice row-plantation. By virtue of row plantations, the
+robots have a strong prior on the outlay of the field and the
+location of weeds - inter-row and intra-row. Cow pastures on the
+other hand are usually large fields with little to no regular maintenance. In the case of organic dairy farms, that form the focus
+group for this work, weed growth is significant and can spread
+fast if not controlled in time. Rough uneven terrain combined
+
+D
+
+Manuscript received September 10, 2021; accepted January 23, 2022. Date of
+publication February 24, 2022; date of current version March 16, 2022. This letter was recommended for publication by Associate Editor N. Kottege and Editor
+P. Pounds upon evaluation of the reviewers’ comments. This work was supported
+in part by MN LCCMR Program and in part by USDA. (Corresponding author:
+Parikshit Maini.)
+The authors are with the Department of Computer Science and Engineering, University of Minnesota, Minneapolis, MN 55455 USA (e-mail:
+pmaini@umn.edu; gonul004@umn.edu; isler@umn.edu).
+This letter has supplementary downloadable material available at
+https://doi.org/10.1109/LRA.2022.3154006, provided by the authors.
+Digital Object Identifier 10.1109/LRA.2022.3154006
+
+Fig. 1. Cowbot - autonomous weed mower operating on a cow pasture. As
+shown in the image on the right, weeds on cow pastures can grow up to 1-2
+meters tall.
+
+with large and dense weed populations makes it challenging to
+operate in cow pastures. This results in the need to develop a
+robust and intelligent robotic weeding platform.
+In this paper, we present the design of our autonomous weed
+mowing robot for cow pastures called Cowbot (Fig. 1). Cowbot is
+designed to operate in the rugged environments on cow pastures
+and provides a cost-effective method for weed control in organic
+fields. The density of weeds on a pasture affects the cost of
+operation of the Cowbot. In fields with dense weed cover, a boustrophedon coverage path [8] is usually the most efficient path to
+mow all weeds. In case of low density or localized distribution
+of weeds, a boustrophedon path results in considerable wastage
+of resources, specially on large fields. We assume a finite field of
+view of the Cowbot within which it is able to detect and localize
+all weeds. Then, an intuitive solution is to perform a random
+search on the pasture and mow weeds as they are detected.
+This strategy would eventually allow the Cowbot to mow all
+weeds but as shown in Section VII, it is not cost effective since
+the random search results in repetitive coverage of same areas.
+Another major drawback to any random search based method is
+not knowing when to terminate. Common termination criteria
+include stopping when no new weeds are detected for a period of
+time or when a threshold for maximum path length (or time) is
+reached. This necessitates the design of intelligent path planning
+algorithms to ensure all weeds on the pasture are detected and
+mowed by the autonomous mower. We refer to the online path
+planning for Cowbot as the mower routing problem (MRP). In
+this paper, we present a formulation for MRP and develop two
+online path planning algorithms, called JUMP and SNAKE, to
+compute efficient solutions. Our path planning algorithms use
+new information about weeds on the pasture to improve path
+length by up to 60 % as compared to boustrophedon and randomsearch based coverage paths. We implement our algorithms on
+the Cowbot and perform field experiments to validate that our
+
+2377-3766 © 2022 IEEE. Personal use is permitted, but republication/redistribution requires IEEE permission.
+See https://www.ieee.org/publications/rights/index.html for more information.
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+5446
+
+IEEE ROBOTICS AND AUTOMATION LETTERS, VOL. 7, NO. 2, APRIL 2022
+
+algorithms are suitable for real-time path planning. We also
+perform large-scale computational simulations and benchmark
+the performance of our solution methods with online and offline
+baseline methods. We show that JUMP provides 100% weed
+coverage while trading off in terms of path length as the number
+of weeds increases. SNAKE is best suited for low density weed
+populations and R-SNAKE (a variant of SNAKE) provides an
+efficient alternative when 100% weed removal is not essential.
+
+II. RELATED WORK
+The design and development of mobile robots for weed
+removal applications has witnessed growth in recent years.
+Bakker et al. [9] have designed a weeding robot for intra-row
+weed removal. Bawden et al. [2] develop a versatile agricultural robot equipped with a heterogeneous set of weeding implements and develop weed detection methods. Grimstad and
+From [10] present the design of Thorvald agricultural robot and
+demonstrate the robustness and modularity of their design in
+field trials. While there exists literature on weed detection and
+system design, there is relatively little work on path planning
+for agricultural robots beyond coverage path planning. Weed
+distribution on pastures is not known a priori and is hard to
+estimate. As a result boustrophedon-like coverage paths can lead
+to large wastage of resources.
+The mower routing problem finds relevance in many wellstudied problems such as variants of the traveling salesman
+problem (TSP), coverage path planning (CPP) and curvature
+constrained path planning. In dynamic TSP [11] for instance,
+the distribution of city locations is unknown at the start of the
+problem. However, unlike in MRP wherein the mower must
+search for weeds on the pasture, city locations in dynamic TSP
+are generated by a stochastic process and made available to
+the salesman during path execution. Another variant of TSP
+that requires the path to satisfy non-holonomic constraints of
+a Dubins motion model [12] is called Dubins TSP [13]. While
+both of these problems are similar to MRP, they do not capture all
+of its constraints. Hence their solution methods cannot be used to
+solve MRP. Coverage path planning also relates to MRP and addresses coverage of bounded spaces with a finite sensor footprint.
+Galceran and Carreras [14] and more recently Khan et al. [15],
+present literature reviews on CPP variants and their solutions.
+Khan et al. [15] focus on CPP methods for curvature constrained
+mobile robots. Online variants of CPP such as active [16]–[19]
+and sensor-driven [20]–[23] coverage path planning also find
+relevance to our work. The primary focus of this line of research
+is to ensure that utility of data collected by the robot(s) is maximized based on application specific metrics. These application
+areas include classification [18], [19], 3D reconstruction [16],
+[17], aerial coverage [22], resolution-complete coverage [23],
+[24], inspection to detect mines and/or chemicals [21], seabed
+monitoring [17], [20] and ship hull inspection [16].
+However, none of these problems and their solution methods
+extend to MRP. In the case of MRP, in addition to online
+and curvature-constrained coverage of the environment with its
+sensing footprint, the robot must also visit each weed location
+
+detected in the field using a different coverage footprint (mowing footprint). Existing work in the literature does not address
+this coupled coverage requirement. A solution to MRP would
+be useful in other similar applications such as detecting and
+collecting trash [25], identifying and collecting high utility rock
+samples for planetary rovers [26] and detecting & removing
+rocks from agricultural fields. Existing work on these problems
+only considers a subset of constraints of MRP and does not
+deploy their algorithms on actual robots. For instance, [25]
+considers a fully actuated robot model that does not have any
+curvature constraints for trash picking and [26] addresses an
+offline problem that assumes that the location of all sample sites
+is available to the planetary rover a priori. There does not exist
+any work in the literature that addresses MRP.
+In this paper, we present the design of our autonomous weed
+mowing robot for cow pastures called Cowbot. We formalize
+the online coverage planning problem for the Cowbot to mow
+weeds as the mower routing problem and develop two online
+solution methods, called JUMP and SNAKE. We compare the
+performance of our online planning methods with coverage and
+TSP based solution methods. We also compare our methods
+with a random-search based reactive online planner. We conduct
+extensive simulations and show that our algorithms lead to up
+to 60% shorter paths as compared to boustrophedon or randomsearch based methods by efficiently utilizing information about
+weed locations. We also deploy our algorithms on the Cowbot
+and conduct field experiments to verify computational efficiency
+and suitability of our methods for real-time path planning.
+Paper Organisation: We present the system design for Cowbot in Section III and formalize the problem statement for MRP
+in Section IV. In Section V, we discuss preliminaries and develop
+upper and lower bounds for the solution space. We present our
+solution methods for MRP in Section VI. In Section VII and
+VIII, we present results from simulations and field experiments,
+respectively. In Section IX we discuss conclusions and identify
+future directions to this work.
+
+III. COWBOT SYSTEM DESIGN
+Cowbot is built on the Toro Groundmaster 3280-D rotary
+mower platform. It has a four-wheel drive transmission system
+with steering control on the rear wheels and a turning radius of
+1.5 m at the geometric center. It weighs around 800 kgs. It is
+customized to operate with a 32 kW electric motor powered by
+a 28.8 kWh lithium ion battery pack. It is designed to be a standalone solution for weed control. As part of the project, a cargo
+trailer was equipped with retractable solar panels on the roof
+and climbing ramps to house the Cowbot and recharge it on the
+pasture without the need for any charging infrastructure. Cowbot
+incorporates a suite of safety features including a wireless remote
+emergency stop button, pressure activated perimeter bumpers
+and emergency stop knobs on the front and back of the mower.
+It comprises a flail-deck weeding implement to reduce the risk
+of flying debris during autonomous operations. The flail-deck
+has a cutting width of 1.3 m and weighs 225 kgs. It is custom
+mounted with high ground clearance to achieve a cut-height of
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+MAINI et al.: ONLINE COVERAGE PLANNING FOR AN AUTONOMOUS WEED MOWING ROBOT WITH CURVATURE CONSTRAINTS
+
+Fig. 2. (a) Robot model showing the robot (gray), detection field of view
+(yellow), weeding implement (red) and weeds (solid disks) in the pasture. The
+green disk shows an undetected weed on the pasture and blue disk shows a weed
+detected by the mower within the detection field of view. (b) Cowbot operating
+on steep slopes in the pasture.
+
+5447
+
+implement has a finite width, B. A weed is considered mowed
+when the implement passes over it.
+We also consider the mower model to consist of a weed
+detection module that includes a suite of front facing imaging
+sensors and continues to operate throughout the execution of a
+path. The weed detection field of view (FOV) is finite, triangular
+shaped and apexed at the front center of the mower (see Fig. 2(a)
+for an illustration of the FOV). The depth, Sd , and width at the
+farthest point in the FOV, Sw , define the range of the detection
+module on the mower. The mower is able to detect and localize
+a weed in the global frame of reference instantaneously as the
+weed enters its FOV.
+B. Problem Statement
+
+20 cm (8 in.). The high cut ensures sufficient volume of grass for
+the cows even after mowing while also stunting weed growth.
+Cowbot uses a GPS-based point to point inertial navigation
+system and is equipped with two multi-band RTK GNSS receiver units (SwiftNav Duro Inertial) with inbuilt IMU sensors
+to provide high accuracy location and heading estimates. It is
+also equipped with front facing imaging sensors that includes
+two RGB-D cameras (Intel RealSense D455) and a lidar sensor
+(Velodyne Puck VLP-16). The perception stack of the Cowbot
+that aims to build capability for visual inertial navigation and
+weed detection on the field is currently under development. The
+sensors connect to an onboard laptop computer (Dell Precision
+7530) that runs the navigation software. The navigation software
+on Cowbot has a three-layer architecture. The top and middle
+layers execute on the laptop and the bottom layer executes on a
+programmable logic controller (TORO PLC model # - Tec 5004)
+that controls the traction and steering systems. The top layer
+is the perception and planning layer that takes input from the
+user and on-board sensors, and plans paths for the mower. The
+middle layer comprises of high level control modules for point
+to point navigation. It communicates with the top layer over the
+robot operating system (ROS) and takes as input the waypoint
+path computed by the planner. It generates steering and speed
+commands for the bottom layer. The bottom layer generates
+signals for the electric motor and the hydraulic steering to follow
+commanded speed and steering values. The middle and bottom
+layers communicate using CANBUS messaging protocol.
+IV. PROBLEM FORMULATION
+In this section, we define the system model for the Cowbot
+used in path planning and present the problem statement.
+
+Let E be a rectangular pasture. E is assumed to be obstacle-free
+and fully traversable by the mower. The mower does not have
+any prior information on the location or distribution of weeds
+within E. To ensure all weeds on the pasture are detected, the
+mower must cover the entire pasture with its FOV and perform
+path planning to visit and mow each of the detected weeds. The
+Mower Routing Problem (MRP) can then be defined as follows:
+Given a pasture E with unknown weed distribution and an
+autonomous mower equipped with a front mounted weeding
+implement and a finite FOV (as defined in Section IV-A), develop
+an online path planning policy that plans a path for the mower to
+detect and mow all weeds in E while minimizing the total length
+of the path.
+V. PRELIMINARIES
+In this section, we define the notation used to develop the solution methods, discuss Dubins path preliminaries and compute
+bounds on the solution space to MRP.
+Given a rectangular pasture E of size (L × W ), we consider
+an inertial frame of reference such that the four corners of the
+pasture are located at (0, 0), (L, 0), (L, W ) and (0, W ). For ease
+of exposition we will refer to locations with bigger y-coordinates
+as being located above locations with smaller y-coordinates, and
+vice-versa as being located below. Current state of the mower is
+represented as (xm , ym , θm ), where (xm , ym ) are the location
+coordinates and θm is the heading angle. The mower maintains
+a list, W, of weeds detected on the pasture that are yet to be
+mowed. Each weed is marked as a point object on the field and
+is identified by its location coordinates, wi = (xi , yi ).
+A. Dubins Paths
+
+A. System Model
+As the Cowbot moves in the pasture, it sweeps the ground
+with the weeding implement and mows any weeds that it passes
+over. For the purpose of path planning, we approximate its motion model with non-holonomic motion constraints that follow
+Dubins car-like vehicle model [12] and moves with a constant
+forward speed. It has a finite turning radius, R, and similar to the
+Cowbot is equipped with a front mounted weeding implement
+(see Fig. 2) that it pushes as it moves forward. The weeding
+
+We use primitives from Dubins shortest path algorithm for
+curvature constrained vehicles [12] to compute traversable paths
+for the Cowbot. Specifically we consider Dubins paths of the
+type C + SC − , where C + and C − are circular arcs in opposite
+direction and S is a straight line path. LSR and RSL paths are
+realizations of the C + SC − path type, where R refers to a circular
+arc in the clockwise direction and L refers to a circular arc in
+the counter clockwise direction. Both circular arcs turn with the
+minimum turn radius, R.
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+5448
+
+IEEE ROBOTICS AND AUTOMATION LETTERS, VOL. 7, NO. 2, APRIL 2022
+
+B. Bounding the Solution Space
+Weed distribution on the pasture significantly affects the
+length of the mower’s path needed to mow all weeds. We present
+two edge-case scenarios and use them to compute upper and
+lower bounds on the solution space.
+First, consider a pasture with a uniform weed distribution and
+densely packed weeds. The mower must mow every point on
+the pasture to ensure that all weeds are mowed. An optimal
+mower path in this scenario is a boustrophedon coverage path
+(BCP). A boustrophedon path [8] to cover the pasture comprises
+of straight line passes of length L across the pasture that are
+parallel to x-axis. Consecutive passes in the boustrophedon path
+have opposite direction of motion and are B distance away from
+each other. Let yp (i) be the y-coordinate corresponding to the
+ith pass in the path and θp (i) be the direction of motion on the
+pass. The first pass of the path is along the line, yp = B/2 and
+the last pass is along the line yp =  W
+B  × B − B/2. When it is
+clear from the context we use yp and θp interchangeably with
+yp (i) and θp (i), respectively. Such a path ensures all weeds on
+the pasture are mowed regardless of the weed distribution and
+provides an upper bound on the path length for the mower.
+Second, consider the scenario with no weeds on the pasture.
+Since the mower does not have any information about the weed
+distribution, it must at least cover the pasture with its FOV
+to search for weeds. Consider another BCP but with spacing
+between consecutive passes equal to Sw . This reduces the total
+number of passes by a factor of SBw . At the end of this path, the
+mower has deterministic knowledge of all weed locations (or of
+the absence of weeds) on the pasture. This is the minimum length
+path needed for the mower to search for weeds on the pasture
+and in the case no weeds are detected it forms the solution to
+the MRP instance. This provides a lower bound on the solution
+space of MRP.
+
+VI. SOLUTION METHODS
+In this section, we present solution methods to the mower
+routing problem to detect and mow weeds on a pasture. We design two online planning algorithms, named JUMP and SNAKE,
+that build on top of BCP. We present systematic modifications to
+BCP that account for Cowbot’s curvature constraints and utilize
+its FOV and width of the weeding implement to enable efficient
+online coverage of the pasture.
+
+A. JUMP Online Planning Algorithm
+The JUMP planner modifies BCP by introducing the ideas of
+jumps and spring. It computes a path for the mower that starts
+at the bottom of the pasture and makes its way towards the top
+while doing to-and-fro passes across the pasture much like a
+boustrophedon path. A jump allows the mower to make detours
+to mow nearby weeds within its FOV and then return back to
+the current pass to continue on its path. Spring behavior of the
+JUMP planner permits variable spacing between consecutive
+passes, unlike BCP, resulting in a stretch and shrink pattern to
+better utilize new information about weeds on the pasture.
+
+Fig. 3. LSR-RSL jump to mow a weed at point (b) with θp = 0. (a) and (c)
+are the start and end points of the jump.
+
+When there are no weeds directly in front of the mower on its
+current path, it makes a search for nearby weeds that it can mow
+by making a quick detour. We restrict these detours to weeds
+that are located above the current pass, thus leading to the name
+jump. A jump consists of two sub-paths: first, to go up to the
+weed’s location from the current position and second, to come
+back down to the current pass. We use Dubins paths of type
+RSL and LSR to compute sub-paths for a jump. Each jump is
+defined by three waypoints: start and end points of the jump
+and the location of the weed. We fix the heading angle at each
+of the three waypoints to θp . When θp = 0, jumps comprise of
+sub-path LSR to go to the weed and RSL to come back to the
+path (Fig. 3), and vice-versa when θp = π. Ties among jumps
+starting at the same point are broken arbitrarily.
+At the end of a pass, the planner must compute yp (i + 1) value
+for the next pass with θp (i + 1) = π − θp (i). It is computed as
+the minimum of the three expressions in (1).
+⎧
+⎪
+⎪
+⎨yp (i) + Sw /2
+min yi + B/2
+yp (i + 1) = min ∀i:w
+(1)
+i ∈W
+⎪
+⎪
+⎩W − B/2
+JUMP planner admits dynamic spacing between consecutive
+passes allowing a spring-like behavior. To this end, the first
+condition corresponds to maximum spacing (equal to Sw /2),
+the second condition corresponds to the bottom-most unmowed
+weed and admits tighter spacing (shrink), and the third condition
+corresponds to the pass along the top edge of the pasture.
+Note that, the first condition permits for yp (i + 1) < yp (i) thus
+allowing the mower to go in the negative y-direction on the next
+pass. This occurs when the mower detects a new weed that lies
+below its current pass.
+JUMP planner maintains the following two invariants
+throughout its execution.
+Invariant 1: At the start of a pass there does not exist any
+unmowed weeds in W below (yp − B/2).
+Proof: The invariant is true on the first pass by virtue of it
+being at the bottom edge of the pasture. In consecutive passes,
+the computation of yp ensures coverage of the bottom most weed
+in W, thus maintaining the invariant.
+
+Invariant 2: Consider Wstart to be a snapshot of W at the
+start of a pass. At the end of the pass, there does not exist any
+unmowed weeds in Wstart below (yp + B/2).
+Proof: If the mower traverses a pass without any jumps, all
+weeds in W below yp + B/2 are mowed. The planner computes
+a jump for the mower only in the case when there are no weeds
+in W on the current pass that will be skipped as a result of the
+jump. This maintains the invariant at the end of each pass. 
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+MAINI et al.: ONLINE COVERAGE PLANNING FOR AN AUTONOMOUS WEED MOWING ROBOT WITH CURVATURE CONSTRAINTS
+
+The two invariants along with the termination criteria (2),
+ensure that the mower mows all weeds detected on the pasture.
+(yp == W − B/2) ∩ (W == φ)
+
+(2)
+
+Termination criteria for JUMP is evaluated at the end of each
+pass and evaluates to true if the mower has reached the top of
+the pasture and there are no unmowed weeds left in W.
+B. SNAKE Online Planning Algorithm
+The SNAKE planner derives its name from serpentine to-andfro patterns across the pasture generated in paths computed by
+the planner. It builds on top of the JUMP planner by allowing
+detours in both directions. However, unlike JUMP, SNAKE does
+not require the mower to return to its current pass after mowing
+a weed, thus only completing the first sub-path on a jump. A
+pass of the SNAKE path across the pasture often comprises of
+a sequence of sub-paths to weed locations. SNAKE enforces a
+consistent direction of motion on a pass by fixing the heading
+angle at each weed location to θp .
+At the start of a pass, the planner makes a search for the closest
+weed in W that lies ahead of the mower along its direction of
+motion. If θp = 0, it considers Dubins paths of type LSR and
+RSL to compute sub-paths to weeds located above and below
+ym respectively, and vice-versa when θp = π. While the mower
+is executing a sub-path, the planner does not search for new
+sub-paths. It resumes the search when the mower completes a
+sub-path. If there do not exist any weeds in W along the mower’s
+direction of motion, the mower continues to move straight ahead
+with heading angle θm = θp . When the mower reaches the end of
+the pasture along its direction of motion, the planner computes
+yp (i + 1) value (using (3)) for the start of the next pass with
+θp (i + 1) = π − θp (i).
+
+yp (i) + Sw /2 + B/2
+yp (i + 1) = min
+(3)
+W − B/2
+The value for yp (i + 1) is computed as the minimum of the
+two expressions in (3). The first expression corresponds to
+fixed spacing between passes (equal to Sw /2 + B/2) and the
+second expression corresponds to the pass starting along the top
+edge of the pasture. Note that, in the case of SNAKE, yp only
+determines the start point of a pass. The mower typically veers
+off of yp while executing sub-paths to mow weeds. It continues
+traversing on consecutive passes across the pasture alternating
+in its direction of motion until the termination criteria is met.
+Termination criteria for SNAKE ((4)) is evaluated at the end
+of each pass. It evaluates to true if the mower has reached the
+top of the pasture and there are no unmowed weeds left in W.
+The mower is determined to have reached the top of the pasture
+if the current pass starts along the top edge of the pasture i.e.
+yp = W − B/2, and the mower’s current location is also along
+the top edge i.e. ym ≥ W − B.
+(ym ≥ W − B) ∩ (yp == W − B/2) ∩ (W == φ)
+
+(4)
+
+We also define a variation of the SNAKE planner called
+RESTRICTED-SNAKE (R-SNAKE) that trades off weed coverage in favor of shorter path length for the mower. While SNAKE
+
+5449
+
+admits sub-paths to all unmowed weeds along its direction of
+motion, R-SNAKE restricts its search to weeds, wi ≡ (xi , yi ),
+located at most a fixed threshold below the yp value of the current
+pass i.e.:
+3
+(5)
+y i ≥ y p − Sw
+2
+R-SNAKE uses the termination criteria given in (6) and evaluates
+it at the end of each pass. As is apparent from the termination
+criteria, R-SNAKE can potentially miss some weeds on the
+pasture.
+(ym ≥ W − B) ∩ (yp == W − B/2)
+
+(6)
+
+VII. SIMULATION RESULTS
+To evaluate the performance of the online planning algorithms
+presented in Section VI we designed a simulated pasture environment and an autonomous mower operating on the pasture.
+The simulator was implemented in Python 3 programming language and uses PyDubins [27] and Elkai [28] libraries to compute Dubins paths and TSP tours, respectively. The simulations
+were run on a desktop computer with AMD Ryzen 7 processor
+and 32 GB RAM. Psuedocode for our algorithms is available
+at [29]. We compare the performance of our online algorithms
+with three baseline solutions. First, the boustrophedon coverage
+path (BCP) used to compute upper bounds on the path length for
+MRP as given in Section V-B. We recall that path length in case of
+BCP is independent of the weed density and spatial distribution
+and is determined by the size of the pasture and mower’s parameters. The second baseline called BCP-TSP comprises of two
+phases. The first phase involves visual coverage of the pasture
+using the lower bounding BCP (as described in Section V-B),
+while also mowing any weeds that lie directly on the mower’s
+path. The second phase computes a TSP tour for the mower
+to visit unmowed weeds detected in the first phase. The third
+baseline is an online reactive planner (REACT) that performs
+a random search for weeds on the pasture and mows weeds
+in the order they are detected. The planner generates random
+waypoints for the mower to perform a search. When it detects
+a weed, the mower aborts the random search and starts to visit
+weed locations in FIFO order while still detecting new weeds
+that enter the mower FOV. It resumes the random search once all
+detected weeds are mowed. It terminates when the path length
+equals BCP path length (upper bound).
+A. Simulation Setup
+We perform the simulations in a pasture of size 100 m × 40 m.
+To populate weeds on the pasture we use two different spatial
+distributions, uniform (U ) and Gaussian (G). In the case of
+Gaussian distribution, 20% of the weeds are sampled uniformly
+at random and chosen as seeds for Gaussian clusters used to
+generate rest of the weed locations. Fig. 4 shows simulation
+instances with uniform (Fig. 4(b), (c) and (d)) and Gaussian
+(Fig. 4(f), (g) and (h)) weed distributions and paths planned by
+the different planners. The mower is configured to operate with
+a constant speed of 1 m/s and comprises of a front mounted
+weeding implement of width B = 2m. We vary the number of
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+5450
+
+IEEE ROBOTICS AND AUTOMATION LETTERS, VOL. 7, NO. 2, APRIL 2022
+
+Fig. 4. (a) upper bounding BCP path. (e) lower bounding BCP path. (b)-(d)
+show uniform distribution of weeds on a simulated pasture with 40, 160 and 640
+weeds respectively. (f)-(h) show Gaussian distribution of weeds on a simulated
+pasture with 40, 160 and 640 weeds respectively.
+TABLE I
+RANGE OF VALUES OF VARIOUS SIMULATION PARAMETERS
+
+Fig. 6. The plots show trends in (a) path length and (b) % of weeds mowed, as
+a function of number of weeds on the pasture for various planning algorithms.
+Both plots show trends for both uniform and Gaussian distributions. Values for
+other parameters: R = 2m, Sd = 12m, Sw = 12m.
+
+Fig. 7. The plots show trends in (a) path length and (b) % of weeds mowed, as
+a function of turning radius of the mower. The plots show data points averaged
+over all sizes of weed population. Fixed parameters: Sd = 12m, Sw = 12m.
+
+Fig. 5. Sample paths for the Cowbot planned using various planning algorithms to mow 40 weeds on a simulated pasture. Green area marks the pasture
+boundary, red disks mark the weeds and the solid blue line shows the mower
+path. (a) JUMP (b) SNAKE (c) R-SNAKE (d) BCP (e) BCP-TSP (f) REACT.
+
+weeds N = ||W|| on the pasture (in turn the weed density),
+detection FOV and turning radius of the mower to study their
+effect on paths computed by the online planners. For each
+combination of weed distribution (U/G) and weed count N ,
+we generate 100 random instances. Table I lists the names and
+range of values for each of the simulation parameters.
+B. Results
+We use two evaluation metrics to compare and evaluate the
+performance of our solution methods - a) length of the mower’s
+path and b) percentage of weeds mowed on the pasture. For ease
+of exposition we express the path length as a percentage of BCP
+path length that provides an upper bound on the solution space
+for MRP. We remark that (a) BCP ensures 100% weed coverage
+and by definition has path length equal to 100%, (b) BCP-TSP
+ensures 100% weed coverage on the pasture while trading-off in
+terms of path length and (c) REACT trades-off weed coverage
+in favor of fixed path length equal to 100% of the BCP length.
+1) Effect of weed density: Density of weeds on the pasture
+visibly affects the path length (Fig. 6); it increases consistently
+with increase in the number of weeds for all planning algorithms.
+For smaller weed populations, each of our online planning
+
+algorithms - JUMP, SNAKE and R-SNAKE - leads to large
+improvement in path length, by up to 60%, as compared to
+BCP and REACT. SNAKE and R-SNAKE are best suited for
+low density weed populations. In scenarios, where 100% weed
+coverage is not required, R-SNAKE provides an efficient method
+to reduce path length. As the weed density increases beyond a
+threshold, it is more efficient to mow the entire pasture instead
+of visiting individual weed locations. We observe that path
+length for JUMP converges to BCP length and does not increase
+proportionally. This is expected since JUMP shrinks the spacing
+between consecutive passes to accommodate the higher density
+and starts to mimic a BCP path. SNAKE and R-SNAKE do not
+support variable spacing and hence, do not have a mechanism to
+accommodate the high density of weeds. Path length for these
+two planners increases consistently with increase in the size of
+the weed population.
+Fig. 6(b) shows additional insights on the effects of weed
+density. The percentage of weeds mowed by the random-search
+based reactive planner (REACT) drops drastically as the weed
+density increases since the effect of repetitive area coverage
+due to random sampling becomes more pronounced. JUMP and
+SNAKE planners on the other hand, ensure 100% and 99.4%
+weed coverage, respectively. R-SNAKE planner leads to 97.5
+% coverage on average, even though the detection rate for RSNAKE is ∼100 %. This is consistent with its design philosophy
+to trade-off weed coverage in favor of shorter path length and
+also explains the observation that R-SNAKE consistently has
+shorter path length than SNAKE.
+2) Effect of turning radius: We make two major observations
+from Fig. 7(a) and (b) showing the effects of turning radius
+on the performance of the planning algorithms. First, the weed
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+MAINI et al.: ONLINE COVERAGE PLANNING FOR AN AUTONOMOUS WEED MOWING ROBOT WITH CURVATURE CONSTRAINTS
+
+5451
+
+Fig. 8. The plots show trends in path length, (a) and (c), and % of weeds mowed, (b) and (d), as a function of change in FOV of the mower. (a) and (b) show
+variation with FOV width and (c) and (d) show variation with FOV depth. The figure plots data averaged over all R values. Sd was set to 12 m for (a) and (b), and
+Sw was set to 12 m for (c) and (d).
+
+coverage of R-SNAKE decreases with increase in turn radius.
+As the mower moves to the top, weeds towards the bottom of the
+pasture are not considered anymore for mowing thus decreasing
+weed coverage. Large turn radius reduces the mower’s agility
+and results in fewer subpaths on each pass, thus magnifying the
+effect of restricted range of R-SNAKE. Second, when turn radius
+is very small, path length for JUMP shows an abrupt increase.
+On investigation, we found that small turn radius makes it easier
+for the mower to compute jumps to mow nearby weeds. This
+increases the number of jumps on the mower’s path, thereby
+increasing the path length.
+3) Effect of detection range: Contrary to intuition, we found
+that depth of the FOV does not have any noticeable effect on path
+length (Fig. 8(c)). Width of the FOV, on the other hand, has a
+more pronounced effect on path length. We observe a parabolic
+trend in the path length for our online planners when the width
+of the detection FOV, Sw , is varied (Fig. 8(a)).
+We note that Sw affects the detection of weeds that do not lie
+on the current pass. In the case of JUMP, when the FOV is narrow,
+the path has negligible number of jumps and converges to BCP.
+When the FOV is wide, the mower’s path comprises of excessive
+number of jumps resulting in an increase in the path length.
+In the case of SNAKE and R-SNAKE, a narrow FOV leads to
+missed detection of weeds on the pasture resulting in reduced
+weed coverage (Fig. 8(b)). In case of R-SNAKE (Fig. 8(b) and
+(d)), the effect of smaller FOV due to either of Sd or Sw is
+magnified due to its restriction of movement, leading to missed
+weed detections and reduced coverage.
+
+VIII. FIELD EXPERIMENTS
+Cowbot has been tested extensively on multiple farm fields
+with different types of terrain. It is able to mow large and
+dense weed populations and is able to operate in the rugged
+environment on cow pastures. The custom designed navigation
+controller for Cowbot was tuned extensively in environments
+with varying topography including grass fields, steep hills, cow
+pastures with dense vegetation and rough terrain. The cut-quality
+of Cowbot and performance of the navigation controller were
+tested using BCP paths on cow pastures. Fig. 9 shows aerial
+views of a cow pasture located in Morris, Minnesota before
+and after a Cowbot BCP mowing experiment. To evaluate the
+performance of the online planning algorithms for Cowbot, field
+experiments were conducted on a farm field located near Morgan
+
+Fig. 9. Before (a) and after (b) aerial views of a cow pasture of size 90 × 20 sq.
+meters mowed by the Cowbot with a boustrophedon coverage path. The pasture
+boundary in the before image is highlighted by a mowed perimeter.
+
+Fig. 10. Visualization of the path followed by Cowbot in field experiments
+using different online planning algorithms: (a) JUMP (b) SNAKE (c) R-SNAKE.
+Green area marks the boundary of the pasture area and red disks show the location
+of weed markers on the field.
+
+in Minnesota, United States during Cowbot’s public demonstrations at the Minnesota Farm Fest 2021. The experiments were
+conducted in an area of size 36 × 26 sq. meters.
+For the purpose of these experiments we assume the availability of a weed detection module with a detection FOV of
+size (Sd , Sw ) ≡ (8, 6), similar in configuration to the mower
+model discussed in Section VI. To visualize the experiments we
+geotagged 14 weed locations, sampled uniformly at random, on
+the field and marked them with flags. Cowbot’s instantaneous
+FOV was computed based on its location and heading estimates.
+When a geotagged weed entered the FOV of the mower it was
+marked as detected and it’s location information was made
+available to the planner. We conducted field experiments for
+JUMP, SNAKE and R-SNAKE planning algorithms. The BCP
+path length computed offline for the pasture is 897.00 m. Length
+of JUMP, SNAKE and R-SNAKE paths followed by the Cowbot
+on the field were 410.78 m (45.79%), 337.94 m (37.67%) and
+338.04 m (37.68%) respectively. The numbers in bracket show
+the relative path length to the BCP path. Each of the mower
+paths was able to mow all 14 weeds on the field. Fig. 10 traces
+the paths followed by the Cowbot for each of the three online
+planners. The experiments show that Cowbot is well suited to
+mow weeds on pastures and our online planning algorithms
+are computationally efficient to deploy on real-time systems.
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+5452
+
+IEEE ROBOTICS AND AUTOMATION LETTERS, VOL. 7, NO. 2, APRIL 2022
+
+Experiment video showing the Cowbot in action is included in
+the multimedia attachment.
+IX. CONCLUSION AND FUTURE DIRECTIONS
+Lawn mowers and smaller robotic platforms are not well
+suited for operating in dairy farms. We presented the design
+of Cowbot, our autonomous weed mowing robot to operate in
+rugged terrain on cow pastures. The density and distribution of
+weeds on a pasture can vary significantly. As a result, coverage
+paths do not always provide the most efficient solution. We formulated the mower routing problem and developed online path
+planning algorithms, named JUMP and SNAKE (and R-SNAKE
+as a variant of SNAKE), to efficiently detect and mow weeds on
+the pasture. We deployed our online planning algorithms on the
+Cowbot and validated their suitability for real-time path planning
+in field experiments. We also performed large scale simulated
+experiments to compare the performance of our planners with
+multiple baseline methods. We conclude that SNAKE and RSNAKE are best suited for low density weed populations and
+R-SNAKE provides an efficient alternative when 100% weed
+removal is not essential. JUMP consistently provides 100%
+weed coverage in all scenarios including very high weed density
+and shows an asymptotic increase in path length with increase
+in the number of weeds.
+We are currently working on incorporating on board computer
+vision algorithms on the Cowbot to detect weeds on the fly. In
+our future work we would also like to address energy efficiency,
+robustness and safety of operating Cowbot.
+ACKNOWLEDGMENT
+Cowbot was developed as part of the project titled ‘Agricultural Weed Control using Autonomous Mowers’ funded by
+Minnesota State LCCMR (Legislative-Citizen Commission on
+Minnesota Resources) program. The project is a collaboration
+between University of Minnesota and the Toro Company.
+REFERENCES
+[1] “USDA National Agricultural Statistics Service, 2017 census of agriculture,” Accessed: Sep. 09, 2021. [Online]. Available: www.nass.usda.gov/
+AgCensus
+[2] O. Bawden et al., “Robot for weed species plant-specific management,” J.
+Field Robot., vol. 34, no. 6, pp. 1179–1199, 2017.
+[3] F. K. van Evert et al., “A robot to detect and control broad-leaved dock
+(rumex obtusifolius l) in grassland,” J. Field Robot., vol. 28, no. 2,
+pp. 264–277, 2011.
+[4] M. Pérez-Ruíz, D. C. Slaughter, F. A. Fathallah, C. J. Gliever, and B.
+J. Miller, “Co-robotic intra-row weed control system,” Biosyst. Eng.,
+vol. 126, pp. 45–55, 2014.
+[5] K. D. Hansen et al., “An autonomous robotic system for mapping weeds
+in fields,” Int. Federation Accountants Proc. Volumes, vol. 46, no. 10,
+pp. 217–224, 2013.
+[6] R. Oberti et al., “Selective spraying of grapevines for disease control using
+a modular agricultural robot,” Biosyst. Eng., vol. 146, pp. 203–215, 2016.
+
+[7] R. Barth, J. Hemming, and E. J. van Henten, “Design of an eye-in-hand
+sensing and servo control framework for harvesting robotics in dense
+vegetation,” Biosyst. Eng., vol. 146, pp. 71–84, 2016.
+[8] H. Choset, “Coverage of known spaces: The boustrophedon cellular decomposition,” Auton. Robots, vol. 9, no. 3, pp. 247–253, 2000.
+[9] T. Bakker, K. Asselt, J. Bontsema, J. Müller, and G. Straten, “Systematic
+design of an autonomous platform for robotic weeding,” J. Terramechanics, vol. 47, no. 2, pp. 63–73, 2010.
+[10] L. Grimstad and P. J. From, “The thorvald II agricultural robotic system,”
+Robotics, vol. 6, no. 4, p. 24, 2017.
+[11] V. Pillac, M. Gendreau, C. Guéret, and A. L. Medaglia, “A review of
+dynamic vehicle routing problems,” Eur. J. Oper. Res., vol. 225, no. 1,
+pp. 1–11, 2013.
+[12] L. E. Dubins, “On curves of minimal length with a constraint on average
+curvature, and with prescribed initial and terminal positions and tangents,”
+Amer. J. Math., vol. 79, no. 3, pp. 497–516, 1957.
+[13] S. Rathinam, R. Sengupta, and S. Darbha, “A resource allocation algorithm
+for multivehicle systems with nonholonomic constraints,” IEEE Trans.
+Automat. Sci. Eng., vol. 4, no. 1, pp. 98–104, Jun. 2007.
+[14] E. Galceran and M. Carreras, “A survey on coverage path planning
+for robotics,” Robot. Auton. Syst., vol. 61, no. 12, pp. 1258–1276,
+2013.
+[15] A. Khan, I. Noreen, and Z. Habib, “On complete coverage
+path planning algorithms for non-holonomic mobile robots: Survey
+and challenges,” J. Inf. Sci. Eng., vol. 33, no. 1, pp. 101–121,
+2017.
+[16] G. A. Hollinger, B. Englot, F. S. Hover, U. Mitra, and G. S. Sukhatme,
+“Active planning for underwater inspection and the benefit of adaptivity,”
+Int. J. Robot. Res., vol. 32, no. 1, pp. 3–18, 2013.
+[17] Z. Shen, J. P. Wilson, and S. Gupta, “An online coverage path planning
+algorithm for curvature-constrained AUVs,” in Proc. Oceans MTS/IEEE
+SEATTLE, 2019, pp. 1–5.
+[18] G. A. Hollinger, U. Mitra, and G. S. Sukhatme, “Active Classification:
+Theory and Application to Underwater Inspection,” in Robotics Research,
+Berlin, Germany: Springer, 2017, pp. 95–110.
+[19] M. Popović, G. Hitz, J. Nieto, I. Sa, R. Siegwart, and E. Galceran, “Online
+informative path planning for active classification using uavs,” in Proc.
+IEEE Int. Conf. Robot. Automat., 2017, pp. 5753–5758.
+[20] N. Kapctanović, N. Mišković, and A. Tahirović, “Information gain-guided
+online coverage path planning for side-scan sonar survey missions,” in
+Proc. 26th Mediterranean Conf. Control Automat., 2018, pp. 1–9.
+[21] L. Paull, S. Saeedi, M. Seto, and H. Li, “Sensor-driven online coverage planning for autonomous underwater vehicles,” IEEE/ASME Trans.
+Mechatronics, vol. 18, no. 6, pp. 1827–1838, Dec. 2013.
+[22] L. Paull, C. Thibault, A. Nagaty, M. Seto, and H. Li, “Sensor-driven area
+coverage for an autonomous fixed-wing unmanned aerial vehicle,” IEEE
+Trans. Cybern., vol. 44, no. 9, pp. 1605–1618, Sep. 2014.
+[23] X. Kan, H. Teng, and K. Karydis, “Online exploration and coverage planning in unknown obstacle-cluttered environments,” IEEE Robot. Automat.
+Lett., vol. 5, no. 4, pp. 5969–5976, Oct. 2020.
+[24] J. Song and S. Gupta, “ε : An online coverage path planning algorithm,”
+IEEE Trans. Robot., vol. 34, no. 2, pp. 526–533, Apr. 2018.
+[25] C.-H. Chiang, “Vision-based coverage navigation for robot trash collection
+task,” in Proc. Int. Conf. Adv. Robot. Intell. Syst., 2015, pp. 1–6.
+[26] J. C. Cardema, P. K. C. Wang, and G. Rodriguez, “Optimal path planning
+of mobile robots for sample collection,” J. Robot. Syst., vol. 21, no. 10,
+pp. 559–580, 2004.
+[27] A. Walker, “Dubins-curves: An open implementation of shortest paths
+for the forward only car,” 2008. [Online]. Available: https://github.com/
+AndrewWalker/Dubins-Curves
+[28] F. Dimitrovski, “elkai - A python 3 tsp solver,” 2018. [Online]. Available:
+https://github.com/fikisipi/elkai
+[29] P. Maini, B. M. Gonultas, and V. Isler, “Online coverage planning for
+an autonomous weed mowing robot with curvature constraints,” 2021,
+arXiv:2111.10462.
+
+Authorized licensed use limited to: University of Chinese Academy of SciencesCAS. Downloaded on May 24,2023 at 06:57:57 UTC from IEEE Xplore. Restrictions apply.
+
+

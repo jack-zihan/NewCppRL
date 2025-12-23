@@ -195,7 +195,7 @@ if __name__ == "__main__":
         # num_obstacles_range = [0, 0]
         # map_dir = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
         # map_dir = "envs_new/maps/indoor_coverage",
-        boundary_source = "field",
+        # boundary_source = "field",
         state_size = (512, 512),
         state_downsize = (512, 512),
         multiscale_feature_size = 16,
@@ -209,9 +209,11 @@ if __name__ == "__main__":
         obs, info = env.reset(seed=120, options={
             'weed_distribution': 'gaussian',  # Updated parameter name
             # 'map_id': 80,
+            'map_id': 22,
             "weed_count": 100,  # Updated parameter name
             # "specific_scenario_dir": real_map_dir
         })
+
         env.action_space.seed(66)
         done = False
         while not done:

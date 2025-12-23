@@ -1,0 +1,40 @@
+# 五算法快速对比测试配置
+# 目的：在相同条件下运行BCP/JUMP/SNAKE/R_SNAKE/REACT，生成PNG验证行为
+
+env:
+  id: "NewPasture-v2"
+  base_kwargs:
+    state_size: [256, 256]
+    state_downsize: [256, 256]
+    action_type: "continuous"
+    use_trajectory: true
+    boundary_source: "box"
+    use_apf: true           # APF势场吸引杂草
+    use_mist: true          # 视野探索掩码
+    multiscale_feature_size: 32
+
+scenes:
+  weed_dists: ["gaussian"]  # 1种分布
+  seeds: [25]               # 1个种子
+  levels:
+    - name: "easy"
+      num_obstacles_range: [0, 0]  # 无障碍物
+      weed_num: 50                  # 50株杂草
+      map_ids: [2]                  # 1张地图
+
+methods:
+  learning: []              # 不运行学习算法
+  rules:
+    - name: "BCP"           # 基础蛇形覆盖
+    - name: "JUMP"          # 智能跳跃
+    - name: "SNAKE"         # 蛇形跳跃
+    - name: "R_SNAKE"       # 受限蛇形
+    - name: "REACT"         # 反应式
+
+eval:
+  max_steps: 3000           # 3000步
+  L_thresholds: [0.9, 0.95, 0.98]
+  workers_learning: 1
+  workers_rules: 5          # 5进程并行
+  render_last_frame: true   # 保存PNG
+  output_root: "rules_new/outputs_eval_5alg_test"

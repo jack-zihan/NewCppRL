@@ -40,6 +40,8 @@ rules/.DS_Store
 /wandb/
 /tests/
 # /envs_new/maps/indoor_coverage/
-
+/rules_new/
+/rules_new2/outputs*
+/rules_new2/tests
 # git laptop use
 push_to_github_laptop.sh

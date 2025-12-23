@@ -219,7 +219,7 @@ if __name__ == "__main__":
         # env.set_obstacle_range([0,0])
         obs, info = env.reset(seed=120, options={
             'weed_dist': 'gaussian',
-            # 'map_id': 80,
+            'map_id': 22,
             "weed_num": 100,
             # "specific_scenario_dir": real_map_dir
         })
