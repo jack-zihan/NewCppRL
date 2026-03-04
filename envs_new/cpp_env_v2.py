@@ -82,6 +82,7 @@ class CppEnv(CppEnvBase):
                       }
 
         super().__init__(render_mode=render_mode, **{**v2_configs, **kwargs})
+
         if self.config.use_apf: self.reward_system.add_calculator("apf", APFCalculator)  # 注册APF奖励计算器
         #
         self.scenario_generator.add_component('overlap', OverlapMapCreator())
@@ -123,10 +124,10 @@ class CppEnv(CppEnvBase):
 
     def _get_observation_maps(self) -> Dict[str, Dict[str, Any]]:
         """生成APF增强的观察地图"""
-        # 提取原始地图
+        # 提取原始地图, 记录一下为什么不要轨迹地图了，因为增加了重复覆盖热图，比点轨迹多了宽度信息，因此关闭轨迹信息
         field, obstacle, mist = self.maps_dict['field'], self.maps_dict['obstacle'], self.maps_dict['mist']
-        # trajectory = self.maps_dict['trajectory'] if self.config.use_trajectory else np.zeros(
-        #     (self.env_state.dimensions))
+        trajectory = self.maps_dict['trajectory'] if self.config.use_trajectory else np.zeros(
+            (self.env_state.dimensions))
 
         weed = self.maps_dict['weed_noisy'] if (self.config.weed_noise and self.np_random.uniform() < self.config.weed_noise) \
             else self.maps_dict['weed']
@@ -142,16 +143,16 @@ class CppEnv(CppEnvBase):
             obs_obstacle = self.get_discounted_apf(obstacle_edges, 3, pad=True)
             obs_obstacle = np.maximum(obs_obstacle, np.logical_and(obstacle, mist))
             obs_weed = self.get_discounted_apf(weed_filtered, 40, 1e-2) # 原版40
-            # obs_trajectory = self.get_discounted_apf(trajectory, 4) if self.config.use_trajectory else trajectory
+            obs_trajectory = self.get_discounted_apf(trajectory, 4) if self.config.use_trajectory else trajectory
         else:
             obs_field = field_edges.astype(float)
             obs_obstacle = obstacle_edges.astype(float)
             obs_weed = weed_filtered.astype(float)
-            # obs_trajectory = trajectory.astype(float)
+            obs_trajectory = trajectory.astype(float)
 
         # 组装观察数组供奖励计算
         layers = [obs_field, np.logical_not(mist).astype(float), obs_obstacle, obs_weed]
-        # if self.config.use_trajectory: layers.append(obs_trajectory)
+        if self.config.use_trajectory: layers.append(obs_trajectory)
 
         # 保存APF数组供奖励计算
         self.maps_dict['apf'] = np.stack(layers, axis=0) if self.config.use_apf else None
@@ -163,19 +164,18 @@ class CppEnv(CppEnvBase):
             'obstacle': {'map': obs_obstacle, 'pad': 1.0},
             'weed': {'map': obs_weed, 'pad': 0.0},
         }
-        # if self.config.use_trajectory:
-        #     obs_maps['trajectory'] = {'map': obs_trajectory, 'pad': 0.0}
+        if self.config.use_trajectory:
+            obs_maps['trajectory'] = {'map': obs_trajectory, 'pad': 0.0}
 
-        # 重复覆盖热图：归一化到[0,1]，上限由overlap_tolerance控制（对应当前阶段的冗余预算R*）
-        normalized_overlap = (np.clip(self.maps_dict['overlap'] + 1, 0, self.config.overlap_tolerance + 1)
-                              / (self.config.overlap_tolerance + 1))  # 当观测=1.0时，表示该区域已达到奖励breakeven阈值
-        obs_maps['overlap'] = {'map': normalized_overlap.astype(np.float32), 'pad': 0.0}
+        # # 重复覆盖热图：归一化到[0,1]，上限由overlap_tolerance控制（对应当前阶段的冗余预算R*）
+        # normalized_overlap = (np.clip(self.maps_dict['overlap'] + 1, 0, self.config.overlap_tolerance + 1)
+        #                       / (self.config.overlap_tolerance + 1))  # 当观测=1.0时，表示该区域已达到奖励breakeven阈值
+        # obs_maps['overlap'] = {'map': normalized_overlap.astype(np.float32), 'pad': 0.0}
 
         # # 覆盖顺序秩通道（稳定秩）：rank = order_label / total_field_area，未覆盖=0
         # normalized_order_map = (self.maps_dict['time_series_coveraged_field'].astype(np.float32) /
         #                         float(int(self.env_state.total_field_area))).astype(np.float32)
         # obs_maps['time_series_coveraged_field'] = {'map': normalized_order_map, 'pad': 0.0}
-
         return obs_maps
 
     def _get_step_info(self) -> Dict[str, Any]:
@@ -193,13 +193,13 @@ if __name__ == "__main__":
         # use_multiscale=False, # 是否使用多尺度观察
         # use_global_features=False,
         # num_obstacles_range = [0, 0]
-        # map_dir = "envs_new/maps/weed_coverage"  # 默认指向weed_coverage根目录
+        map_dir = "envs_new/maps/weed_coverage",  # 默认指向weed_coverage根目录
         # map_dir = "envs_new/maps/indoor_coverage",
         # boundary_source = "field",
-        state_size = (512, 512),
-        state_downsize = (512, 512),
-        multiscale_feature_size = 16,
-        n_scales = 6,
+        # state_size = (512, 512),
+        # state_downsize = (512, 512),
+        # multiscale_feature_size = 16,
+        # n_scales = 6,
     )
     # Note: HumanRendering wrapper would be added here if available
     if if_render: env: CppEnv = HumanRendering(env)  # 封装后，只接收render_mode="rgb_array"的env，使得step和reset的时候展示渲染图像
@@ -222,6 +222,7 @@ if __name__ == "__main__":
             obs, reward, done, truncated, info = env.step(action)
             # obs, reward, done, _, info = env.step((0, 4))
             print(reward)
+            print(obs["observation"].shape)
             if if_render:
                 img = env.render()
 

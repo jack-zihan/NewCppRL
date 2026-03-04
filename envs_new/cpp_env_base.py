@@ -10,7 +10,7 @@ import gymnasium as gym
 import numpy as np
 from typing import Dict, List, Tuple, Union, Optional, Any, Callable
 
-from envs_new.components.config.environment_config import EnvironmentConfig
+from envs_new.components.config.environment_config import EnvironmentConfig, EnvironmentConfigOriginal
 from envs_new.components.map.map_generator import ScenarioGenerator
 from envs_new.components.observation.observation_generator import ObservationGenerator
 from envs_new.components.dynamics.environment_dynamics import EnvironmentDynamics
@@ -41,7 +41,8 @@ class CppEnvBase(gym.Env):
         super().__init__()
 
         # 极简配置创建：直接使用kwargs
-        self.config = EnvironmentConfig(**kwargs)
+        # self.config = EnvironmentConfig(**kwargs)
+        self.config = EnvironmentConfigOriginal(**kwargs) # 使用原版v2观测
 
         self._initialize_components()
         self._initialize_spaces()

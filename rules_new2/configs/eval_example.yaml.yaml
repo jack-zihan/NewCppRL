@@ -1,0 +1,59 @@
+env:
+  id: "NewPasture-v2"
+  base_kwargs:
+    action_type: "continuous"
+    use_trajectory: true
+    use_mist: true
+    use_apf: true
+    boundary_source: "box"
+
+scenes:
+  weed_dists: ["gaussian", "uniform"]
+  # Match the legacy `rules/script.py` evaluation grid.
+  seeds: [25, 27] #[25, 27, 47, 21, 31]
+  levels:
+    - name: "easy"
+      num_obstacles_range: [0, 0]
+      weed_num: 50
+      map_ids: [2, 3, 6, 16, 20]
+    - name: "medium"
+      num_obstacles_range: [2, 4]
+      weed_num: 100
+      map_ids: [4, 9, 21, 59, 80]
+    - name: "hard"
+      num_obstacles_range: [5, 8]
+      weed_num: 200
+      # Note: this list matches rules/script.py as-is (contains a duplicate 22).
+      map_ids: [22, 29, 57, 63, 22]
+
+methods:
+  learning: []
+#    - name: "SAC_TEST"
+#      ckpt: "ckpt/test_used/model_step03650000_reward2803.043_completion1.000_steps9581.5_overlap4815.2.pt"
+#      architecture: "cnn"   # cnn | resnet | vanilla
+#      device: "cpu"         # or cuda:0
+#      enable_hif: false
+  rules:
+#    - name: "BCP"
+    - name: "JUMP"
+#    - name: "SNAKE"
+#    - name: "R_SNAKE"
+#    - name: "REACT"
+
+#eval:
+#  mode: "incremental"   # incremental | overwrite
+#  max_steps: 50000
+#  L_thresholds: [0.9, 0.95, 0.98]
+#  workers_rules: 4
+#  render_last_frame: true
+#  # Use a dedicated output directory to avoid mixing with other eval grids.
+#  output_root: "rules_new2/outputs_eval_rules_script"
+
+eval:
+  mode: "overwrite"
+  max_steps: 10 #50000
+  render_last_frame: true
+  output_root: "rules_new2/outputs_test_jump"
+  workers_rules: 16
+  workers_net: 1
+  L_thresholds: [0.9, 0.95, 0.98]

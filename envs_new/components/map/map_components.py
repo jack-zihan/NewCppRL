@@ -49,7 +49,7 @@ class FieldCreator:
 
         # 若启用缩放：以图像中心为原点做同心等比仿射缩放（保持画布尺寸不变）
         if scale != 1.0: field_map = self._scale_binary_map_center(field_map, scale)
-        bounding_box, field_contours = self._extract_geometry(field_map)  # 提取几何信息, 并存入maps_dicts
+        bounding_box = self._extract_boudingbox(field_map)  # 提取几何信息, 并存入maps_dicts
 
         # 存储field_id和field_sacle到env_state供其他组件使用 (HFI需要和filed地图匹配)
         state['env_state'].set_static_info('field_id', field_id)
@@ -61,7 +61,6 @@ class FieldCreator:
 
         state['env_state'].set_static_info('dimensions', dimensions)
         state['env_state'].set_static_info('bounding_box', bounding_box)
-        state['env_state'].set_static_info('field_contours', field_contours)
         state['env_state'].set_static_info('total_field_area', int(field_map.sum()))  # 设置田地总面积
 
     def _load_from_directory(self, directory: Union[str, Path]) -> Tuple[np.ndarray, Tuple[int, int], Optional[int]]:
@@ -93,23 +92,17 @@ class FieldCreator:
 
         return field_map, dimensions, field_id
 
-    def _extract_geometry(self, field_map: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-        """提取边界框和轮廓"""
-        contours, _ = cv2.findContours(field_map, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours: raise ValueError("No contours found in field map")
-
-        sorted_contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        largest_contour = sorted_contours[0]
-        rect = cv2.minAreaRect(largest_contour)
-        box = cv2.boxPoints(rect)
+    def _extract_boudingbox(self, field_map: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """提取边界框"""
+        rect = cv2.minAreaRect(cv2.findNonZero(field_map)) # # 所有前景点拟合旋转矩形
+        box = cv2.boxPoints(rect).astype(np.int32).reshape((-1, 1, 2))
 
         # box顺序是按顺时针方向排列的四个顶点，起点在左上角
         start_idx = box.sum(axis=1).argmin()
         box = np.roll(box, 4 - start_idx, 0).astype(int)
         box = box.reshape((-1, 1, 2))
 
-        return [box], sorted_contours
+        return [box]
 
     def _scale_binary_map_center(self, binary_map: np.ndarray, scale: float) -> np.ndarray:
         """以图像中心为原点对二值掩码做同心等比缩放，保持画布尺寸不变。
@@ -495,21 +488,17 @@ class MistCreator:
 
         # 集成可见性调整功能
         if state['config'].ensure_field_visibility:
-            self._ensure_field_visibility(state['maps_dict'], state['agent'].position,  # agent当前位置
-                state['env_state'].get_static_info('field_contours'))  # 地图边界轮廓
+            self._ensure_field_visibility(state['maps_dict'], state['agent'].position_discrete)  # agent当前离散位置
 
     def _ensure_field_visibility(self, maps_dict: Dict[str, np.ndarray],
-                                 agent_position: Tuple[float, float],
-                                 field_contours: List[np.ndarray]) -> None:
+                                 agent_position_discrete: Tuple[float, float]) -> None:
         """确保田地在agent初始视野中可见"""
         field_in_vision = np.logical_and(maps_dict['field'], maps_dict['mist'])
         if not field_in_vision.any():
-            largest_contour = field_contours[0]
-            dist_to_field = cv2.pointPolygonTest(largest_contour, agent_position, True)
-
+            x, y = agent_position_discrete
+            dist_to_field = cv2.distanceTransform(1-maps_dict["field"], cv2.DIST_L2, 3)[y, x] # 距离变换计算所有非零像素到零像素的距离，因此1-field
             radius = math.ceil(abs(dist_to_field) + 5)
-            agent_position_discrete = (int(agent_position[0]), int(agent_position[1]))
-            cv2.circle(img=maps_dict['mist'], center=agent_position_discrete, radius=radius, color=(1,), thickness=-1)
+            cv2.circle(img=maps_dict['mist'], center=(x,y), radius=radius, color=(1,), thickness=-1)
 
 # HIFCreator已移至envs_new/cpp_env_v5.py作为内部类，提高代码内聚性
 

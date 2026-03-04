@@ -10,7 +10,7 @@ env:
 scenes:
   weed_dists: ["gaussian", "uniform"]
   # Match the legacy `rules/script.py` evaluation grid.
-  seeds: [25, 27] #[25, 27, 47, 21, 31]
+  seeds: [25, 27, 47, 21, 31] #[25, 27, 47, 21, 31]
   levels:
     - name: "easy"
       num_obstacles_range: [0, 0]
@@ -27,26 +27,34 @@ scenes:
       map_ids: [22, 29, 57, 63, 22]
 
 methods:
-  rules:
+  learning: # []
+    - name: "ours"
+      ckpt: "ckpt/test_used/model_step03650000_reward2803.043_completion1.000_steps9581.5_overlap4815.2.pt"
+      architecture: "cnn"   # cnn | resnet | vanilla
+      device: "cuda:0"         # or cuda:0
+      enable_hif: false
+  rules: []
 #    - name: "BCP"
-    - name: "JUMP"
+#    - name: "JUMP"
 #    - name: "SNAKE"
 #    - name: "R_SNAKE"
 #    - name: "REACT"
 
-#eval:
-#  mode: "incremental"   # incremental | overwrite
-#  max_steps: 50000
-#  L_thresholds: [0.9, 0.95, 0.98]
-#  workers_rules: 4
-#  render_last_frame: true
-#  # Use a dedicated output directory to avoid mixing with other eval grids.
-#  output_root: "rules_new2/outputs_eval_rules_script"
-
 eval:
-  mode: "overwrite"
+  mode: "overwrite" #"incremental"   # incremental | overwrite
   max_steps: 50000
-  render_last_frame: true
-  output_root: "rules_new2/outputs_test_jump"
-  workers_rules: 16
   L_thresholds: [0.9, 0.95, 0.98]
+  workers_rules: 8
+  workers_net: 4
+  render_last_frame: true
+  # Use a dedicated output directory to avoid mixing with other eval grids.
+  output_root: "rules_new2/full_test"
+
+#eval:
+#  mode: "overwrite"
+#  max_steps: 10 #50000
+#  render_last_frame: true
+#  output_root: "rules_new2/outputs_test_jump"
+#  workers_rules: 16
+#  workers_net: 1
+#  L_thresholds: [0.9, 0.95, 0.98]

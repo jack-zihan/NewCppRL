@@ -41,7 +41,7 @@ class Agent(ABC):
 
     @property
     def position_discrete(self) -> Tuple[int, int]:
-        return round(self._x), round(self._y)
+        return int(self._x), int(self._y) # 这里离散网格应该落在floor中而不是round
 
     @property
     def speed(self) -> float:

@@ -38,10 +38,16 @@ class EnvironmentConfig:
     obstacle_min_distance_to_edge: int = 100  # 障碍物离地图边缘最小像素数
     obstacle_min_distance_to_agent: float = 2.0  # 障碍物离智能体最少几倍体长
     obstacle_min_gap: int = 10               # 障碍物之间最小间距（像素），防止聚集分割田地
-    boundary_expand_ratio: float = 1.2        # 障碍物边界扩展比例（1.2=扩大20%）
+    boundary_expand_ratio: float = 1.2        # boudingbox障碍物边界扩展比例（1.2=扩大20%）
     boundary_min_expand_pixels: int = 60      # 边界最小扩展像素数
     weed_avoid_obstacle_pixels: int = 29      # 障碍物周围不生成杂草的像素数
-    
+    # 课程学习：田地面积缩放（默认关闭）
+    # 当启用时，在 reset 时按区间随机采样一个缩放因子 s∈[min,max]，
+    # 以图像中心为原点对 field（以及 v5/v6 的 HIF）做同心等比缩放，保持画布尺寸不变。
+    field_scale_enabled: bool = False
+    field_scale_range: Tuple[float, float] = (1.0, 1.0)
+
+
     # 智能体配置参数（原AgentConfig）
     agent_width: float = 4.0
     agent_length: float = 6.0
@@ -112,12 +118,6 @@ class EnvironmentConfig:
     temporal_decay_rate: float = 0.85 # 置信度的时间衰减率（hif环境特有）
     spatial_spread_sigma: float = 3.0 # 置信度的空间扩散标准差（hif环境特有）
 
-    # 课程学习：田地面积缩放（默认关闭）
-    # 当启用时，在 reset 时按区间随机采样一个缩放因子 s∈[min,max]，
-    # 以图像中心为原点对 field（以及 v5/v6 的 HIF）做同心等比缩放，保持画布尺寸不变。
-    field_scale_enabled: bool = False
-    field_scale_range: Tuple[float, float] = (1.0, 1.0)
-
     def __post_init__(self):
         """最小化验证，只检查关键约束"""
         if self.v_min >= self.v_max:
@@ -162,6 +162,17 @@ class EnvironmentConfig:
     def w_range(self) -> 'NumericalRange':
         return NumericalRange(self.w_min, self.w_max)
 
+@dataclass
+class EnvironmentConfigOriginal(EnvironmentConfig):
+    # 观察配置参数（原ObservationConfig）
+    state_size: Tuple[int, int] = (128, 128) # (256, 256) #(128, 128)
+    state_downsize: Tuple[int, int] = (128, 128) #(128, 128)
+    use_multiscale: bool = True
+    n_scales: int = 4
+    multiscale_feature_size: int = 16 # 16
+    use_global_features: bool = True #新版global_features是基于base_observation的，因此暂时失效不用，但老版是True
+    position_noise: float = 0.0
+    direction_noise: float = 0.0
 
 @dataclass
 class NumericalRange:
