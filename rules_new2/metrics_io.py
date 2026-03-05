@@ -84,6 +84,8 @@ def collect_episode(
     render_last_frame: bool,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Run one episode with two-stage reset; return (run_dict, extra)."""
+    step_limit = int(max_steps)
+    use_step_cap = step_limit >= 0
     seed = int(meta["seed"])
     scene_opts = {
         "map_id": meta["map_id"],
@@ -116,10 +118,17 @@ def collect_episode(
     terminated = False
     truncated = False
     planner_idle = False
+    hit_step_cap = False
+    step_count = 0
 
-    for _ in range(max_steps):
+    while True:
+        if use_step_cap and step_count >= step_limit:
+            hit_step_cap = True
+            break
+
         action = policy_fn(obs, env)
         obs, reward, terminated, truncated, info = env.step(action)
+        step_count += 1
 
         rewards.append(float(reward))
         completion.append(float(obs["completion_ratio"][0]))
@@ -134,7 +143,11 @@ def collect_episode(
         if pos_info and pos_info.current is not None:
             positions.append(tuple(pos_info.current))
 
-        if terminated or truncated:
+        timeout_now = bool(base_env.env_state.timeout)
+        if terminated:
+            break
+        # max_steps < 0 时忽略环境 timeout 截断（由成功/碰撞/规划器结束）。
+        if truncated and not (not use_step_cap and timeout_now):
             break
         if planner is not None and is_planner_idle(planner):
             planner_idle = True
@@ -153,7 +166,7 @@ def collect_episode(
     elif planner_idle:
         done_type = "planner_idle"
         done_trigger = "planner"
-    elif timeout_flag or not (terminated or truncated):
+    elif timeout_flag or hit_step_cap:
         done_type = "timeout"
         done_trigger = "env" if timeout_flag else "max_steps"
     else:
