@@ -24,24 +24,24 @@ scenes:
       num_obstacles_range: [5, 8]
       weed_num: 200
       # Note: this list matches rules/script.py as-is (contains a duplicate 22).
-      map_ids: [22, 29, 57, 63, 22]
+      map_ids: [22, 29, 166, 197, 483]
 
 methods:
-  learning: # []
-    - name: "ours"
-      ckpt: "ckpt/test_used/model_step03650000_reward2803.043_completion1.000_steps9581.5_overlap4815.2.pt"
-      architecture: "cnn"   # cnn | resnet | vanilla
-      device: "cuda:0"         # or cuda:0
-      enable_hif: false
-  rules: []
+  learning: []
+#    - name: "ours"
+#      ckpt: "ckpt/test_used/model_step03650000_reward2803.043_completion1.000_steps9581.5_overlap4815.2.pt"
+#      architecture: "cnn"   # cnn | resnet | vanilla
+#      device: "cuda:0"         # or cuda:0
+#      enable_hif: false
+  rules: # []
 #    - name: "BCP"
-#    - name: "JUMP"
-#    - name: "SNAKE"
-#    - name: "R_SNAKE"
-#    - name: "REACT"
+    - name: "JUMP"
+    - name: "SNAKE"
+    - name: "R_SNAKE"
+    - name: "REACT"
 
 eval:
-  mode: "overwrite" #"incremental"   # incremental | overwrite
+  mode: "incremental" #"incremental"   # incremental | overwrite
   max_steps: 50000
   L_thresholds: [0.9, 0.95, 0.98]
   workers_rules: 8

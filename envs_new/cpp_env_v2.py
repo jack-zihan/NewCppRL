@@ -209,7 +209,7 @@ if __name__ == "__main__":
         obs, info = env.reset(seed=120, options={
             'weed_distribution': 'gaussian',  # Updated parameter name
             # 'map_id': 80,
-            'map_id': 22,
+            'map_id': 483, # 22, 29, 57, 63, 197 hard
             "weed_count": 100,  # Updated parameter name
             # "specific_scenario_dir": real_map_dir
         })

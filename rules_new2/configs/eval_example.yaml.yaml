@@ -24,7 +24,7 @@ scenes:
       num_obstacles_range: [5, 8]
       weed_num: 200
       # Note: this list matches rules/script.py as-is (contains a duplicate 22).
-      map_ids: [22, 29, 57, 63, 22]
+      map_ids: [22, 29, 166, 197, 483]
 
 methods:
   learning: []

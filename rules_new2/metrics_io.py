@@ -164,23 +164,42 @@ def collect_episode(
     idx95 = next((i for i, c in enumerate(completion) if c >= 0.95), None)
     steps95 = (len(rewards) - idx95) if idx95 is not None else None
 
-    # 95%→done 的“路径长度”版本（只对正常 finished 的回合有意义）
+    # 90%/95%->done 的“路径长度与比例”版本（只对正常 finished 的回合有意义）
+    L90_val = float(L.get("L90", -1.0))
     L95_val = float(L.get("L95", -1.0))
-    if done_type == "env_success" and L95_val >= 0 and path_length:
-        length_95_to_done = float(path_length[-1] - L95_val)
+    if done_type == "env_success" and path_length:
+        total_len = float(path_length[-1])
+        length_90_to_done = float(total_len - L90_val) if L90_val >= 0 else np.nan
+        length_95_to_done = float(total_len - L95_val) if L95_val >= 0 else np.nan
+        if total_len > 0:
+            path_len_ratio_90_to_done = (
+                float(length_90_to_done / total_len) if np.isfinite(length_90_to_done) else np.nan
+            )
+            path_len_ratio_95_to_done = (
+                float(length_95_to_done / total_len) if np.isfinite(length_95_to_done) else np.nan
+            )
+        else:
+            path_len_ratio_90_to_done = np.nan
+            path_len_ratio_95_to_done = np.nan
     else:
+        length_90_to_done = np.nan
         length_95_to_done = np.nan
+        path_len_ratio_90_to_done = np.nan
+        path_len_ratio_95_to_done = np.nan
 
     run: Dict[str, Any] = {
         "meta": meta,
         "episode_reward": float(sum(rewards)),
         "episode_length": len(rewards),
         "completion_final": completion[-1] if completion else 0.0,
-        "overlap_final": overlap[-1] if overlap else None,
+        "overlap_count_final": overlap[-1] if overlap else None,
         "done_type": done_type,
         "done_trigger": done_trigger,
         "steps_95_to_done": steps95,  # 保留 raw step 版本，summary 不再使用
+        "length_90_to_done": length_90_to_done,
         "length_95_to_done": length_95_to_done,
+        "path_len_ratio_90_to_done": path_len_ratio_90_to_done,
+        "path_len_ratio_95_to_done": path_len_ratio_95_to_done,
         "rewards": rewards,
         "completion": completion,
         "overlap": overlap,
@@ -218,8 +237,9 @@ def load_runs(root: Path):
             "timeout": 1.0 if data["done_type"] == "timeout" else 0.0,
             "planner_idle": 1.0 if data["done_type"] == "planner_idle" else 0.0,
             "success": 1.0 if data["done_type"] == "env_success" else 0.0,
-            "overlap_final": data.get("overlap_final", np.nan),
-            "length_95_to_done": data.get("length_95_to_done", np.nan),
+            "overlap_count_final": data.get("overlap_count_final", data.get("overlap_final", np.nan)),
+            "path_len_ratio_90_to_done": data.get("path_len_ratio_90_to_done", np.nan),
+            "path_len_ratio_95_to_done": data.get("path_len_ratio_95_to_done", np.nan),
         }
 
         # Dynamically include all Lxx metrics present in the run file.
@@ -253,8 +273,9 @@ def aggregate_runs_to_summary(root: Path):
         "timeout_rate": ("timeout", "mean"),
         "planner_idle_rate": ("planner_idle", "mean"),
         "success_rate": ("success", "mean"),
-        "overlap_mean": ("overlap_final", "mean"),
-        "length95_mean": ("length_95_to_done", "mean"),
+        "overlap_count_mean": ("overlap_count_final", "mean"),
+        "path_len_ratio_90_to_done_mean": ("path_len_ratio_90_to_done", "mean"),
+        "path_len_ratio_95_to_done_mean": ("path_len_ratio_95_to_done", "mean"),
     }
     for col in L_cols:
         agg_spec[f"{col}_mean"] = (col, "mean")
@@ -269,12 +290,13 @@ def aggregate_runs_to_summary(root: Path):
         ["method", "level", "dist", "n_runs", "reward_mean", "completion_mean"]
         + ordered_L_means
         + [
-            "length95_mean",
+            "path_len_ratio_90_to_done_mean",
+            "path_len_ratio_95_to_done_mean",
             "success_rate",
             "collision_rate",
             "timeout_rate",
             "planner_idle_rate",
-            "overlap_mean",
+            "overlap_count_mean",
         ]
     )
     agg_all = agg_all.reindex(columns=base_cols)

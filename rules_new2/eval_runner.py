@@ -505,6 +505,22 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(Path(args.config))
+
+    # Use eval.max_steps as the single timeout source of truth by forcing
+    # env max_episode_steps to the same value.
+    eval_max_steps = int(cfg["eval"]["max_steps"])
+    env_cfg = cfg.setdefault("env", {})
+    base_kwargs = env_cfg.setdefault("base_kwargs", {})
+    if (
+        "max_episode_steps" in base_kwargs
+        and int(base_kwargs["max_episode_steps"]) != eval_max_steps
+    ):
+        print(
+            "[Eval] override env.base_kwargs.max_episode_steps="
+            f"{base_kwargs['max_episode_steps']} -> eval.max_steps={eval_max_steps}"
+        )
+    base_kwargs["max_episode_steps"] = eval_max_steps
+
     tasks_all = build_tasks(cfg)
 
     eval_cfg = cfg["eval"]
