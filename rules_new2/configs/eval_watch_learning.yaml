@@ -1,0 +1,45 @@
+watch:
+  ckpt_dir: "ckpt/test_used"
+  output_subdir: "external_eval"
+  poll_seconds: 60
+  settle_seconds: 20
+  run_once: true
+
+env:
+  id: "NewPasture-v2"
+  base_kwargs:
+    action_type: "continuous"
+    use_trajectory: true
+    use_mist: true
+    use_apf: true
+    boundary_source: "box"
+
+scenes:
+  weed_dists: ["gaussian", "uniform"]
+  seeds: [25, 27, 47, 21, 31]
+  levels:
+    - name: "easy"
+      num_obstacles_range: [0, 0]
+      weed_num: 50
+      map_ids: [2, 3, 6, 16, 20]
+    - name: "medium"
+      num_obstacles_range: [2, 4]
+      weed_num: 100
+      map_ids: [4, 9, 21, 59, 80]
+    - name: "hard"
+      num_obstacles_range: [5, 8]
+      weed_num: 200
+      map_ids: [22, 29, 57, 63, 22]
+
+method:
+  name: "ours"
+  architecture: "cnn"  # cnn | resnet | vanilla
+  device: "cpu"        # or cuda:0
+  enable_hif: false
+
+eval:
+  mode: "incremental"  # incremental | overwrite
+  max_steps: 50000
+  workers_net: 1
+  render_last_frame: true
+  L_thresholds: [0.9, 0.95, 0.98]
