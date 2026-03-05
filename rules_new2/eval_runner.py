@@ -45,6 +45,8 @@ from rules_new2.metrics_io import (
     save_run_npy,
 )
 
+TIMEOUT_DISABLED_MAX_STEPS = 2_147_483_647
+
 try:
     from tqdm import tqdm
 except Exception:  # pragma: no cover
@@ -506,20 +508,35 @@ def main():
 
     cfg = load_config(Path(args.config))
 
-    # Use eval.max_steps as the single timeout source of truth by forcing
-    # env max_episode_steps to the same value.
+    # Use eval.max_steps as the single timeout source of truth.
+    # Special case: eval.max_steps < 0 means "no step-cap timeout".
     eval_max_steps = int(cfg["eval"]["max_steps"])
     env_cfg = cfg.setdefault("env", {})
     base_kwargs = env_cfg.setdefault("base_kwargs", {})
-    if (
-        "max_episode_steps" in base_kwargs
-        and int(base_kwargs["max_episode_steps"]) != eval_max_steps
-    ):
+    if eval_max_steps < 0:
+        if (
+            "max_episode_steps" in base_kwargs
+            and int(base_kwargs["max_episode_steps"]) != TIMEOUT_DISABLED_MAX_STEPS
+        ):
+            print(
+                "[Eval] override env.base_kwargs.max_episode_steps="
+                f"{base_kwargs['max_episode_steps']} -> {TIMEOUT_DISABLED_MAX_STEPS}"
+            )
+        base_kwargs["max_episode_steps"] = TIMEOUT_DISABLED_MAX_STEPS
         print(
-            "[Eval] override env.base_kwargs.max_episode_steps="
-            f"{base_kwargs['max_episode_steps']} -> eval.max_steps={eval_max_steps}"
+            "[Eval] eval.max_steps < 0: disable step-cap timeout "
+            f"(env.max_episode_steps={TIMEOUT_DISABLED_MAX_STEPS})"
         )
-    base_kwargs["max_episode_steps"] = eval_max_steps
+    else:
+        if (
+            "max_episode_steps" in base_kwargs
+            and int(base_kwargs["max_episode_steps"]) != eval_max_steps
+        ):
+            print(
+                "[Eval] override env.base_kwargs.max_episode_steps="
+                f"{base_kwargs['max_episode_steps']} -> eval.max_steps={eval_max_steps}"
+            )
+        base_kwargs["max_episode_steps"] = eval_max_steps
 
     tasks_all = build_tasks(cfg)
 
