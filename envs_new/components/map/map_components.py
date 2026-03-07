@@ -405,26 +405,62 @@ class WeedCreator:
 
     def _generate_gaussian_distribution(self, field_map: np.ndarray,
                                         weed_count: int, rng: np.random.Generator) -> np.ndarray:
-        """生成高斯分布"""
+        """生成高斯分布
+
+        先在田地区域内均匀采样少量锚点，再围绕这些锚点构造高斯密度图，
+        最后按该密度图无放回采样剩余杂草。这样既保留团簇分布特性，也能
+        保证最终生成的有效杂草数量尽量等于 weed_count。
+        """
         weed_map = np.zeros_like(field_map, dtype=np.uint8)
-        height, width = field_map.shape
+        possible_positions = np.argwhere(field_map == 1)
 
-        center_y, center_x = height / 2, width / 2
-        scale_y, scale_x = height * 0.35, width * 0.35
+        if len(possible_positions) == 0: return weed_map
 
-        candidates = rng.normal(loc=[center_y, center_x], scale=[scale_y, scale_x], size=(weed_count * 5, 2))
+        actual_count = min(weed_count, len(possible_positions))
+        if actual_count <= 0: return weed_map
 
-        candidates = np.round(candidates).astype(int)
-        candidates = np.clip(candidates, [0, 0], [height - 1, width - 1])
-        unique_candidates = np.unique(candidates, axis=0)
+        anchor_ratio = 0.2
+        anchor_count = max(1, int(round(actual_count * anchor_ratio)))
+        anchor_count = min(anchor_count, actual_count)
 
-        valid_mask = field_map[unique_candidates[:, 0], unique_candidates[:, 1]] == 1
-        valid_candidates = unique_candidates[valid_mask]
+        # 1) 在 field 内均匀采样锚点，并直接作为一部分杂草保留
+        anchor_indices = rng.choice(len(possible_positions), size=anchor_count, replace=False)
+        anchor_positions = possible_positions[anchor_indices]
+        weed_map[anchor_positions[:, 0], anchor_positions[:, 1]] = 1
 
-        actual_count = min(weed_count, len(valid_candidates))
-        if actual_count > 0:
-            selected_positions = valid_candidates[:actual_count]
-            weed_map[selected_positions[:, 0], selected_positions[:, 1]] = 1
+        remaining_count = actual_count - anchor_count
+        if remaining_count <= 0: return weed_map
+
+        # 2) 根据锚点构造高斯密度图
+        density = np.zeros(field_map.shape, dtype=np.float32)
+        density[anchor_positions[:, 0], anchor_positions[:, 1]] = 1.0
+
+        ys, xs = possible_positions[:, 0], possible_positions[:, 1]
+        span_y, span_x = max(1.0, float(ys.max() - ys.min())), max(1.0, float(xs.max() - xs.min()))
+        sigma = max(3.0, 0.08 * min(span_y, span_x))
+        density = cv2.GaussianBlur(density, ksize=(0, 0), sigmaX=sigma, sigmaY=sigma)
+        density *= field_map.astype(np.float32)
+
+        # 已选锚点不重复采样
+        density[anchor_positions[:, 0], anchor_positions[:, 1]] = 0.0
+
+        # 3) 在 field 内按密度无放回采样剩余杂草
+        remaining_mask = (field_map == 1) & (weed_map == 0)
+        candidate_positions = np.argwhere(remaining_mask)
+
+        if len(candidate_positions) == 0: return weed_map
+
+        sample_count = min(remaining_count, len(candidate_positions))
+        candidate_weights = density[candidate_positions[:, 0], candidate_positions[:, 1]].astype(np.float64)
+
+        if candidate_weights.sum() <= 0:
+            sampled_indices = rng.choice(len(candidate_positions), size=sample_count, replace=False)
+        else:
+            candidate_probs = candidate_weights / candidate_weights.sum()
+            sampled_indices = rng.choice(len(candidate_positions), size=sample_count, replace=False, p=candidate_probs,)
+
+        sampled_positions = candidate_positions[sampled_indices]
+        weed_map[sampled_positions[:, 0], sampled_positions[:, 1]] = 1
 
         return weed_map
 
