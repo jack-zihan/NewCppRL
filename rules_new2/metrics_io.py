@@ -16,9 +16,11 @@ Design goals (Less is More):
 """
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import cv2
 import imageio
 import numpy as np
 
@@ -27,6 +29,39 @@ from rules_new2.coverage_planners_v2 import RectifiedFrame
 
 PolicyFn = Callable[[Dict[str, np.ndarray], Any], Tuple[float, float]]
 PolicyBuilder = Callable[[Any], Tuple[PolicyFn, Optional[Any]]]
+
+
+@lru_cache(maxsize=1)
+def _field_map_files() -> Tuple[Path, ...]:
+    field_dir = Path(__file__).resolve().parents[1] / "envs_new" / "maps" / "weed_coverage" / "field"
+    return tuple(sorted(p for p in field_dir.iterdir() if p.suffix.lower() == ".png"))
+
+
+@lru_cache(maxsize=None)
+def _field_area_from_map_id(map_id: int) -> float:
+    map_files = _field_map_files()
+    if map_id < 0 or map_id >= len(map_files):
+        raise IndexError(f"map_id={map_id} out of range for field map list of size {len(map_files)}")
+    img = cv2.imread(str(map_files[map_id]), cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(f"Failed to read field map: {map_files[map_id]}")
+    field = (img.sum(axis=-1) > 0).astype(np.uint8)
+    return float(field.sum())
+
+
+def _field_area_ref_from_config(root: Path) -> Optional[float]:
+    cfg_path = root / "config_used.yaml"
+    if not cfg_path.exists():
+        return None
+
+    import yaml
+
+    cfg = yaml.safe_load(cfg_path.read_text())
+    levels = cfg.get("scenes", {}).get("levels", [])
+    map_ids = sorted({int(map_id) for level in levels for map_id in level.get("map_ids", [])})
+    if not map_ids:
+        return None
+    return float(np.mean([_field_area_from_map_id(map_id) for map_id in map_ids]))
 
 
 def compute_L_metrics(
@@ -108,6 +143,7 @@ def collect_episode(
     base_env = getattr(env, "unwrapped", env)
 
     policy_fn, planner = policy_builder(env)
+    field_area = float(base_env.env_state.get_static_info("total_field_area") or 0.0)
 
     rewards: List[float] = []
     completion: List[float] = []
@@ -206,6 +242,7 @@ def collect_episode(
         "episode_length": len(rewards),
         "completion_final": completion[-1] if completion else 0.0,
         "overlap_count_final": overlap[-1] if overlap else None,
+        "field_area": field_area,
         "done_type": done_type,
         "done_trigger": done_trigger,
         "steps_95_to_done": steps95,  # 保留 raw step 版本，summary 不再使用
@@ -244,8 +281,10 @@ def load_runs(root: Path):
             "method_type": meta.get("method_type", "rules"),
             "level": meta["level"],
             "dist": meta["weed_dist"],
+            "map_id": int(meta["map_id"]),
             "episode_reward": data["episode_reward"],
             "completion_final": data["completion_final"],
+            "field_area": float(data.get("field_area", _field_area_from_map_id(int(meta["map_id"])))),
             "collision": 1.0 if data["done_type"] == "collision" else 0.0,
             "timeout": 1.0 if data["done_type"] == "timeout" else 0.0,
             "planner_idle": 1.0 if data["done_type"] == "planner_idle" else 0.0,
@@ -278,6 +317,22 @@ def aggregate_runs_to_summary(root: Path):
     for col in L_cols:
         df.loc[df[col] < 0, col] = np.nan
 
+    field_area_ref = _field_area_ref_from_config(root)
+    if field_area_ref is None or field_area_ref <= 0:
+        field_area_ref = float(
+            df[["map_id", "field_area"]].drop_duplicates(subset=["map_id"])["field_area"].mean()
+        )
+
+    valid_area = df["field_area"] > 0
+    area_scale = pd.Series(np.nan, index=df.index, dtype=float)
+    area_scale.loc[valid_area] = field_area_ref / df.loc[valid_area, "field_area"]
+
+    norm_cols: List[str] = []
+    for col in L_cols:
+        norm_col = f"{col}_area_norm"
+        df[norm_col] = df[col] * area_scale
+        norm_cols.append(norm_col)
+
     agg_spec: Dict[str, Tuple[str, str]] = {
         "n_runs": ("episode_reward", "count"),
         "reward_mean": ("episode_reward", "mean"),
@@ -291,17 +346,27 @@ def aggregate_runs_to_summary(root: Path):
         "path_len_ratio_95_to_done_mean": ("path_len_ratio_95_to_done", "mean"),
     }
     for col in L_cols:
+        agg_spec[f"{col}_n"] = (col, lambda s: int(s.notna().sum()))
+        agg_spec[f"{col}_mean"] = (col, "mean")
+    for col in norm_cols:
         agg_spec[f"{col}_mean"] = (col, "mean")
 
     agg_by = df.groupby(["method", "level", "dist"]).agg(**agg_spec).reset_index()
     agg_all = df.groupby(["method", "level"]).agg(**agg_spec).reset_index()
     agg_all.insert(2, "dist", "all")
+    agg_all.insert(3, "field_area_ref", field_area_ref)
+    agg_by.insert(3, "field_area_ref", field_area_ref)
 
     # Reorder columns for readability and stable CSV output.
-    ordered_L_means = [f"{c}_mean" for c in L_cols]
+    ordered_L_stats: List[str] = []
+    for c in L_cols:
+        ordered_L_stats.append(f"{c}_n")
+        ordered_L_stats.append(f"{c}_mean")
+    ordered_norm_L_means = [f"{c}_mean" for c in norm_cols]
     base_cols = (
-        ["method", "level", "dist", "n_runs", "reward_mean", "completion_mean"]
-        + ordered_L_means
+        ["method", "level", "dist", "field_area_ref", "n_runs", "reward_mean", "completion_mean"]
+        + ordered_L_stats
+        + ordered_norm_L_means
         + [
             "path_len_ratio_90_to_done_mean",
             "path_len_ratio_95_to_done_mean",
