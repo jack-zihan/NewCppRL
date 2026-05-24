@@ -10,21 +10,21 @@ env:
 scenes:
   weed_dists: ["gaussian", "uniform"]
   # Match the legacy `rules/script.py` evaluation grid.
-  seeds: [25, 27] #[25, 27, 47, 21, 31]
+  seeds: [25, 27, 47, 21, 31, 88, 111, 121, 151, 200] #[25, 27, 47, 21, 31]
   levels:
     - name: "easy"
       num_obstacles_range: [0, 0]
       weed_num: 50
-      map_ids: [2, 3, 6, 16, 20]
+      map_ids: [2, 3, 6, 16, 20, 115]
     - name: "medium"
-      num_obstacles_range: [2, 4]
+      num_obstacles_range: [1, 3]
       weed_num: 100
-      map_ids: [4, 9, 21, 59, 80]
+      map_ids: [4, 9, 21, 59, 80, 122]
     - name: "hard"
-      num_obstacles_range: [5, 8]
+      num_obstacles_range: [4, 8]
       weed_num: 200
       # Note: this list matches rules/script.py as-is (contains a duplicate 22).
-      map_ids: [22, 29, 166, 197, 483]
+      map_ids: [22, 29, 166, 197, 483, 489]
 
 methods:
   learning: []

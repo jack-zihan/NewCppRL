@@ -64,6 +64,31 @@ def _field_area_ref_from_config(root: Path) -> Optional[float]:
     return float(np.mean([_field_area_from_map_id(map_id) for map_id in map_ids]))
 
 
+def _summary_orders_from_config(root: Path) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+    """从 config_used.yaml 读取 method / level / dist 的展示顺序。"""
+    cfg_path = root / "config_used.yaml"
+    if not cfg_path.exists():
+        return {}, {}, {}
+
+    import yaml
+
+    cfg = yaml.safe_load(cfg_path.read_text())
+    levels = cfg.get("scenes", {}).get("levels", [])
+    weed_dists = cfg.get("scenes", {}).get("weed_dists", [])
+    learning = cfg.get("methods", {}).get("learning", [])
+    rules = cfg.get("methods", {}).get("rules", [])
+
+    level_order = {str(level["name"]): i for i, level in enumerate(levels)}
+    method_order = {
+        str(method["name"]): i
+        for i, method in enumerate(list(learning) + list(rules))
+    }
+    dist_order = {"all": 0}
+    for i, dist in enumerate(weed_dists, start=1):
+        dist_order[str(dist)] = i
+    return method_order, level_order, dist_order
+
+
 def compute_L_metrics(
     completion: List[float],
     path_length: List[float],
@@ -89,6 +114,127 @@ def save_last_frame_png(env, path: Path) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     imageio.imwrite(path, frame)
+
+
+def build_success_contact_sheets(root: Path, grid: Tuple[int, int] = (8, 8)) -> None:
+    """为每个 method/level 生成成功案例聚合图。
+
+    输入：
+    - root: 评估输出根目录，例如 rules_new2/full_opcpp_eval
+    - grid: 每页网格大小，默认 8x8
+
+    规则：
+    - 仅收集 `done_type == "env_success"` 且对应 png 存在的 run；
+    - 每个 level 目录下生成 `success_sheet_XX.png`；
+    - 排序遵循：map_id -> weed_dist(gaussian/uniform) -> seed。
+    """
+    method_order, level_order, dist_order = _summary_orders_from_config(root)
+    grid_rows, grid_cols = grid
+    per_page = max(1, grid_rows * grid_cols)
+
+    thumb_w = 170
+    thumb_h = 170
+    text_h = 42
+    pad = 10
+    title_h = 44
+    cell_w = thumb_w + 2 * pad
+    cell_h = thumb_h + text_h + 2 * pad
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.42
+    line1_y = thumb_h + pad + 16
+    line2_y = thumb_h + pad + 34
+
+    level_dirs = sorted(
+        [p for p in root.glob("*/level-*") if p.is_dir()],
+        key=lambda p: (
+            method_order.get(p.parent.name, 999),
+            level_order.get(p.name.replace("level-", ""), 999),
+            p.parent.name,
+            p.name,
+        ),
+    )
+
+    for level_dir in level_dirs:
+        for old in level_dir.glob("success_sheet_*.png"):
+            old.unlink()
+
+        runs = []
+        for npy_path in sorted(level_dir.glob("*.npy")):
+            stem = npy_path.stem
+            png_path = level_dir / f"{stem}.png"
+            if not png_path.exists():
+                continue
+            data = np.load(npy_path, allow_pickle=True).item()
+            if data.get("done_type") != "env_success":
+                continue
+            meta = data.get("meta", {})
+            dist = str(meta.get("weed_dist", ""))
+            runs.append(
+                {
+                    "npy": npy_path,
+                    "png": png_path,
+                    "map_id": int(meta.get("map_id", -1)),
+                    "seed": int(meta.get("seed", -1)),
+                    "dist": dist,
+                    "dist_tag": "G" if dist == "gaussian" else ("U" if dist == "uniform" else dist[:1].upper()),
+                    "completion": float(data.get("completion_final", 0.0)),
+                }
+            )
+
+        runs.sort(
+            key=lambda x: (
+                x["map_id"],
+                dist_order.get(x["dist"], 999),
+                x["seed"],
+                x["png"].name,
+            )
+        )
+
+        if not runs:
+            continue
+
+        n_pages = int(np.ceil(len(runs) / per_page))
+        for page_idx in range(n_pages):
+            page_runs = runs[page_idx * per_page : (page_idx + 1) * per_page]
+            canvas_h = title_h + grid_rows * cell_h
+            canvas_w = grid_cols * cell_w
+            canvas = np.full((canvas_h, canvas_w, 3), 245, dtype=np.uint8)
+
+            level_name = level_dir.name.replace("level-", "")
+            title = (
+                f"{level_dir.parent.name} | {level_name} | "
+                f"success {len(runs)} | page {page_idx + 1}/{n_pages}"
+            )
+            cv2.putText(canvas, title, (12, 28), font, 0.7, (20, 20, 20), 2, cv2.LINE_AA)
+
+            for i, item in enumerate(page_runs):
+                row = i // grid_cols
+                col = i % grid_cols
+                x0 = col * cell_w
+                y0 = title_h + row * cell_h
+
+                img = cv2.imread(str(item["png"]), cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+
+                h, w = img.shape[:2]
+                scale = min(thumb_w / max(w, 1), thumb_h / max(h, 1))
+                new_w = max(1, int(round(w * scale)))
+                new_h = max(1, int(round(h * scale)))
+                img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+                ix = x0 + pad + (thumb_w - new_w) // 2
+                iy = y0 + pad + (thumb_h - new_h) // 2
+                canvas[iy : iy + new_h, ix : ix + new_w] = img
+                cv2.rectangle(canvas, (x0 + pad, y0 + pad), (x0 + pad + thumb_w, y0 + pad + thumb_h), (180, 180, 180), 1)
+
+                line1 = f"map{item['map_id']} {item['dist_tag']} s{item['seed']}"
+                line2 = f"cov={item['completion']:.3f}"
+                cv2.putText(canvas, line1, (x0 + pad, y0 + line1_y), font, font_scale, (30, 30, 30), 1, cv2.LINE_AA)
+                cv2.putText(canvas, line2, (x0 + pad, y0 + line2_y), font, font_scale, (30, 30, 30), 1, cv2.LINE_AA)
+
+            out_path = level_dir / f"success_sheet_{page_idx + 1:02d}.png"
+            cv2.imwrite(str(out_path), canvas)
 
 
 def canonical_start_pose(env) -> Tuple[float, float, float]:
@@ -276,15 +422,20 @@ def load_runs(root: Path):
             continue
         data = np.load(npy_path, allow_pickle=True).item()
         meta = data["meta"]
+        map_id = int(meta["map_id"])
         row: Dict[str, Any] = {
             "method": meta["method"],
             "method_type": meta.get("method_type", "rules"),
             "level": meta["level"],
             "dist": meta["weed_dist"],
-            "map_id": int(meta["map_id"]),
+            "map_id": map_id,
             "episode_reward": data["episode_reward"],
             "completion_final": data["completion_final"],
-            "field_area": float(data.get("field_area", _field_area_from_map_id(int(meta["map_id"])))),
+            # 这里始终按当前 map_id 对应的 field 掩码重算面积，而不是信任
+            # 历史 npy 中保存的 field_area。原因是地图掩码本身可能在评估后
+            # 被修正/替换；若继续沿用旧值，会让 Lxx_area_norm 与当前场景
+            # 几何定义不一致。
+            "field_area": float(_field_area_from_map_id(map_id)),
             "collision": 1.0 if data["done_type"] == "collision" else 0.0,
             "timeout": 1.0 if data["done_type"] == "timeout" else 0.0,
             "planner_idle": 1.0 if data["done_type"] == "planner_idle" else 0.0,
@@ -356,6 +507,21 @@ def aggregate_runs_to_summary(root: Path):
     agg_all.insert(2, "dist", "all")
     agg_all.insert(3, "field_area_ref", field_area_ref)
     agg_by.insert(3, "field_area_ref", field_area_ref)
+
+    method_order, level_order, dist_order = _summary_orders_from_config(root)
+    for out_df in (agg_all, agg_by):
+        out_df["_method_order"] = out_df["method"].map(method_order).fillna(999).astype(int)
+        out_df["_level_order"] = out_df["level"].map(level_order).fillna(999).astype(int)
+        out_df["_dist_order"] = out_df["dist"].map(dist_order).fillna(999).astype(int)
+
+    agg_all = agg_all.sort_values(
+        by=["_method_order", "_level_order", "_dist_order", "method", "level", "dist"],
+        kind="stable",
+    ).reset_index(drop=True)
+    agg_by = agg_by.sort_values(
+        by=["_method_order", "_level_order", "_dist_order", "method", "level", "dist"],
+        kind="stable",
+    ).reset_index(drop=True)
 
     # Reorder columns for readability and stable CSV output.
     ordered_L_stats: List[str] = []

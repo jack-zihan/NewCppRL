@@ -39,6 +39,7 @@ from rules_new2.coverage_planners_v2 import (
 )
 from rules_new2.metrics_io import (
     aggregate_runs_to_summary,
+    build_success_contact_sheets,
     collect_episode,
     save_config_snapshot,
     save_last_frame_png,
@@ -578,6 +579,7 @@ def main():
     if agg_all is not None and len(agg_all) > 0:
         summary_path = output_root / "summary.csv"
         save_summary_csv(agg_all, agg_by, summary_path)
+        build_success_contact_sheets(output_root)
         meta_path = output_root / "summary_meta.json"
         meta_path.write_text(
             json.dumps(

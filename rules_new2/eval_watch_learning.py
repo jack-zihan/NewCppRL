@@ -124,6 +124,29 @@ def is_step_processed(output_root: Path, step: int) -> bool:
     return step_meta_path(output_root, step).exists()
 
 
+def summary_orders_from_output_root(output_root: Path) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+    """从 watch 根目录的 config_used.yaml 读取 method / level / dist 顺序。"""
+    cfg_path = output_root / "config_used.yaml"
+    if not cfg_path.exists():
+        return {}, {}, {}
+
+    cfg = yaml.safe_load(cfg_path.read_text())
+    levels = cfg.get("scenes", {}).get("levels", [])
+    weed_dists = cfg.get("scenes", {}).get("weed_dists", [])
+    learning = cfg.get("methods", {}).get("learning", [])
+    rules = cfg.get("methods", {}).get("rules", [])
+
+    method_order = {
+        str(method["name"]): i
+        for i, method in enumerate(list(learning) + list(rules))
+    }
+    level_order = {str(level["name"]): i for i, level in enumerate(levels)}
+    dist_order = {"all": 0}
+    for i, dist in enumerate(weed_dists, start=1):
+        dist_order[str(dist)] = i
+    return method_order, level_order, dist_order
+
+
 def build_step_eval_cfg(base_cfg: Dict[str, Any], ckpt_path: Path, step_out: Path) -> Dict[str, Any]:
     """构造单 step 的评估配置，复用标准 eval_runner 管线。"""
     cfg = copy.deepcopy(base_cfg)
@@ -212,7 +235,14 @@ def build_summary_all_steps(output_root: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.concat(rows, ignore_index=True)
-    df = df.sort_values(by=["step", "method", "level", "dist"]).reset_index(drop=True)
+    method_order, level_order, dist_order = summary_orders_from_output_root(output_root)
+    df["_method_order"] = df["method"].map(method_order).fillna(999).astype(int)
+    df["_level_order"] = df["level"].map(level_order).fillna(999).astype(int)
+    df["_dist_order"] = df["dist"].map(dist_order).fillna(999).astype(int)
+    df = df.sort_values(
+        by=["step", "_method_order", "_level_order", "_dist_order", "method", "level", "dist"],
+        kind="stable",
+    ).drop(columns=["_method_order", "_level_order", "_dist_order"]).reset_index(drop=True)
     summary_path = output_root / "summary_all_steps.csv"
     df.to_csv(summary_path, index=False)
     return df
@@ -284,8 +314,8 @@ def draw_trend_plots(df_summary: pd.DataFrame, output_root: Path, levels: List[s
         fig.savefig(plot_dir / "success_collision_curve.png")
     plt.close(fig)
 
-    # L90/L95/L98（按 level 分子图）
-    l_metrics = [col for col in ["L90_mean", "L95_mean", "L98_mean"] if col in df.columns]
+    # 面积归一化后的 L90/L95/L98（按 level 分子图）
+    l_metrics = [col for col in ["L90_area_norm_mean", "L95_area_norm_mean", "L98_area_norm_mean"] if col in df.columns]
     if l_metrics:
         fig, axes = plt.subplots(1, len(levels), figsize=(5.2 * len(levels), 4.6), dpi=140, sharey=True)
         if len(levels) == 1:
@@ -299,11 +329,33 @@ def draw_trend_plots(df_summary: pd.DataFrame, output_root: Path, levels: List[s
             ax.set_xlabel("step")
             ax.grid(alpha=0.3)
             if i == 0:
-                ax.set_ylabel("path length")
+                ax.set_ylabel("area-normalized path length")
             ax.legend()
-        fig.suptitle("L90/L95/L98 vs Step (dist=all)")
+        fig.suptitle("Area-Normalized L90/L95/L98 vs Step (dist=all)")
         fig.tight_layout()
         fig.savefig(plot_dir / "L_curve.png")
+        plt.close(fig)
+
+    # L90/L95/L98 的有效样本数（按 level 分子图）
+    l_count_metrics = [col for col in ["L90_n", "L95_n", "L98_n"] if col in df.columns]
+    if l_count_metrics:
+        fig, axes = plt.subplots(1, len(levels), figsize=(5.2 * len(levels), 4.6), dpi=140, sharey=True)
+        if len(levels) == 1:
+            axes = [axes]
+        for i, level in enumerate(levels):
+            ax = axes[i]
+            d = df[df["level"] == level]
+            for metric in l_count_metrics:
+                ax.plot(d["step"], d[metric], marker="o", linewidth=1.5, label=metric)
+            ax.set_title(f"{level}")
+            ax.set_xlabel("step")
+            ax.grid(alpha=0.3)
+            if i == 0:
+                ax.set_ylabel("valid run count")
+            ax.legend()
+        fig.suptitle("L90/L95/L98 Valid Count vs Step (dist=all)")
+        fig.tight_layout()
+        fig.savefig(plot_dir / "L_count_curve.png")
         plt.close(fig)
 
     # 90/95 到终点的尾段路径比例（按 level 分子图）

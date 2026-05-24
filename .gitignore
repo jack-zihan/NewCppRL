@@ -10,14 +10,20 @@
 # C Extensions
 /extern/
 /cmake-*/
+*.so
 
 # Virtual environment
 /venv/
+/.venv/
 /new_venv/
+/new_venv_upgrade/
 
 # IDEs
 /.idea/
 /.vscode/
+
+# Tools cache
+/.serena/memories/
 
 /ckpt/
 
