@@ -13,7 +13,7 @@ authors = [
     { name = "0Pinky0", email = "lpinkyl@126.com" },
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     # ── PyTorch 栈(torch 默认 PyPI wheel 自带 CUDA;别的 CUDA 见 README「环境部署」)──
     "torch == 2.12.0",
@@ -21,8 +21,8 @@ dependencies = [
     "torchcodec == 0.13.0",     # 视频写盘后端(torchrl 0.12 用它替代已移除的 torchvision.io.write_video)
     "tensordict == 0.12.4",
     "triton == 3.7.0",
-    # 注意:torchrl 0.12.0 *不*在此列 —— 它的 C++ 扩展(_torchrl.so)需对齐 torch ABI,
-    #       必须从源码安装(git clone + pip install -e + build_ext)。详见 README「环境部署」。
+    # 注意:torchrl *不*在此(也不进 uv.lock)—— 它的 C++ 扩展须对齐已装 torch 的 ABI 现编,
+    #       uv lock 在 metadata 阶段拿不到 torch/setuptools(鸡生蛋)。改为 `uv sync` 后的源码步骤,见 README。
     # ── 数值 / RL / 环境 ──
     "numpy == 2.4.6",
     "gymnasium == 1.3.0",
@@ -60,3 +60,17 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+# ── uv 管理(默认环境;py3.14 新栈)──
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true   # 仅 torch/torchvision 用它(下面 sources 显式指定),其余走 PyPI
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+
+[tool.uv.extra-build-dependencies]
+# dubins 的 git 源在 py≥3.13 必须用 cython 重新生成 .c(否则仓库里过时的预生成 .c 编不过)。
+dubins = ["setuptools", "cython", "numpy"]

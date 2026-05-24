@@ -12,8 +12,9 @@
 /cmake-*/
 *.so
 
-# Virtual environment（.venv=新栈默认；new_venv=旧栈回退；旧的无点 venv 已废弃删除）
+# Virtual environment（.venv=uv 管理新栈默认；new_venv=旧栈回退；旧的无点 venv 已删除）
 /.venv/
+/.venv.bak-pip312/
 /new_venv/
 /new_venv_upgrade/
 

@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-运行环境:默认用 `.venv/bin/activate`(新栈 torch2.12 / torchrl0.12 / tensordict0.12.4,`pip install -e .` 重建,部署见 README「环境部署」)。`new_venv` 是升级前旧栈(tensordict0.10.0)的回退环境 —— `git checkout 2026-05-24` + `new_venv` 可完整回到升级前。(旧的无点 `venv` 已废弃删除。)
+运行环境:默认是 **uv 管理的 `.venv`(Python 3.14.5 / torch2.12 / torchrl0.12 / tensordict0.12.4)**,用 `uv sync` 重建(+ torchrl 源码步骤),部署见 README「环境部署」。torchrl 的 editable 源在 `/home/lzh/rl_remote_uv314`(`.venv` 依赖它,勿删)。回退:① pip+py3.12 栈 = `git checkout f4b1a6338`;② 升级前 torch2.8/td0.10 = `git checkout 2026-05-24` + `new_venv`。(旧的无点 `venv` 已删除。)
 
 ## Repository Overview
 
