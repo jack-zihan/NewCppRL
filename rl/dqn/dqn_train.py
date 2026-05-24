@@ -56,7 +56,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
 
     # 2. 实例化训练模块：预训练模型、策略采样模块、collector、replay buffer、loss module、optimizer、logger
     if cfg.pretrained_model:
-        model = torch.load(f'{base_dir}/{cfg.pretrained_model}').to(device)
+        model = torch.load(f'{base_dir}/{cfg.pretrained_model}', weights_only=False, map_location=device).to(device)
     else:
         model = make_dqn_model()
 

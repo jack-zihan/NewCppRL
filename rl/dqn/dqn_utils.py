@@ -1,5 +1,5 @@
 import torch.nn
-from torchrl.data import CompositeSpec
+from torchrl.data import Composite
 from torchrl.modules import QValueActor
 
 from torchrl_utils.model.deep_q_net import DeepQNet
@@ -51,7 +51,7 @@ def make_dqn_modules(proof_environment):
 
     qvalue_module = QValueActor(
         module=dqn,
-        spec=CompositeSpec(action=action_spec), # 包括动作空间的规格说明
+        spec=Composite(action=action_spec), # 包括动作空间的规格说明
         in_keys=["observation", "vector"],
     )
     return qvalue_module

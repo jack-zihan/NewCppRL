@@ -28,7 +28,7 @@ episodes = 10
 
 device = 'cpu'
 pt_path = '/Users/chuyuliu/CppRL-main-chuyu/ckpt/dqn_model_3_0907.pt'
-model = torch.load(pt_path, map_location=torch.device('cpu')).to(device)
+model = torch.load(pt_path, map_location=torch.device('cpu'), weights_only=False).to(device)
 actor = model[0]
 noise_set = [0, 0, 0]
 

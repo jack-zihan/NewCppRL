@@ -111,7 +111,7 @@ class AreaCoverageV5SacEvaluator(CustomEvaluator):
     def get_actor(self,
                   pt_path: str) -> torch.nn.Module:
         """加载SAC actor模型"""
-        model = torch.load(pt_path)
+        model = torch.load(pt_path, weights_only=False, map_location=self.device)
         actor = model[0].to(self.device)
         return actor
 

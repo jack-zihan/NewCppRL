@@ -107,7 +107,7 @@ def main(cfg: DictConfig):
             actor_critic = torch.load(cfg.pretrained_path, map_location=train_device, weights_only=False)
 
             # 为探索策略创建副本
-            exploration_actor_critic = torch.load(cfg.pretrained_path, map_location=collector_devices)
+            exploration_actor_critic = torch.load(cfg.pretrained_path, map_location=collector_devices, weights_only=False)
             exploration_policy = exploration_actor_critic[0]  # 提取 actor
         else:
             # 创建dummy环境用于模型初始化（与官方一致）

@@ -12,8 +12,7 @@
 /cmake-*/
 *.so
 
-# Virtual environment
-/venv/
+# Virtual environment（.venv=新栈默认；new_venv=旧栈回退；旧的无点 venv 已废弃删除）
 /.venv/
 /new_venv/
 /new_venv_upgrade/

@@ -1,7 +1,7 @@
 import torch.nn
 import torch.optim
 from tensordict.nn import TensorDictModule, InteractionType
-from torchrl.data import CompositeSpec
+from torchrl.data import Composite
 from torchrl.modules import (
     OneHotCategorical,
     ProbabilisticActor,
@@ -58,7 +58,7 @@ def make_sac_modules(proof_environment):
         out_keys=["logits"],
     )
     policy_module = ProbabilisticActor(
-        spec=CompositeSpec(action=action_spec),
+        spec=Composite(action=action_spec),
         module=policy_module,
         in_keys=["logits"],
         out_keys=["action"],

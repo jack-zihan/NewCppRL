@@ -18,7 +18,7 @@ act_randomly = True
 
 device = 'cpu'
 pt_path = f'../../ckpt/sac/xxxx/t[02000]_r[2513.68=2471.53~2548.64].pt'
-actor_critic = torch.load(pt_path).to(device)
+actor_critic = torch.load(pt_path, weights_only=False, map_location=device).to(device)
 actor = actor_critic[0].to(device)
 
 # cfg.env.params.num_obstacles_range = [0, 0]

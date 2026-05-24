@@ -16,7 +16,7 @@ render = True
 
 device = 'cpu'
 pt_path = f'../../ckpt/t[01950]_r[517.41=434.62~622.00].pt'
-model = torch.load(pt_path).to(device)
+model = torch.load(pt_path, weights_only=False, map_location=device).to(device)
 actor = model[0]
 
 # cfg.env.params.num_obstacles_range = [0, 0]

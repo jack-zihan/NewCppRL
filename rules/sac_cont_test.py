@@ -48,9 +48,9 @@ episodes = 10
 device = 'cpu'
 pt_path = 'rules/ckpt/t[02600]_r[2731.41=2717.75~2750.74].pt'
 
-model = torch.load(to_absolute_path(pt_path), map_location=torch.device('cpu')).to(device)
+model = torch.load(to_absolute_path(pt_path), map_location=torch.device('cpu'), weights_only=False).to(device)
 
-actor_critic = torch.load(to_absolute_path(pt_path), map_location=torch.device('cpu')).to(device)
+actor_critic = torch.load(to_absolute_path(pt_path), map_location=torch.device('cpu'), weights_only=False).to(device)
 actor = actor_critic[0].to(device)
 
 env, obs = get_env()

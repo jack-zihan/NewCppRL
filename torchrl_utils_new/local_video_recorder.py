@@ -145,7 +145,9 @@ class LocalVideoRecorder:
         if self.idx > 0:
             vid_tensor = self.obs[:, :self.idx]
             if filepath is not None:
-                import torchvision
+                # torchvision.io.write_video was removed in torchvision>=0.24; delegate to
+                # torchrl's version-aware writer (uses torchcodec for torchvision>=0.22).
+                from torchrl.record.loggers.common import _write_video
                 if vid_tensor.shape[-3] not in (3, 1):
                     raise RuntimeError(
                         "expected the video tensor to be of format [T, C, H, W] but the third channel "
@@ -155,7 +157,7 @@ class LocalVideoRecorder:
                     vid_tensor = vid_tensor.flatten(0, vid_tensor.ndim - 4)
                 vid_tensor = vid_tensor.permute((0, 2, 3, 1))
                 vid_tensor = vid_tensor.expand(*vid_tensor.shape[:-1], 3)
-                torchvision.io.write_video(filepath, vid_tensor, fps=self.fps)
+                _write_video(filepath, vid_tensor, fps=self.fps)
         self.iter += 1
         self.count = 0
         self.idx = 0

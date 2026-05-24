@@ -49,7 +49,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
 
     # Make the components
     if cfg.pretrained_model:
-        actor_critic = torch.load(f'{base_dir}/{cfg.pretrained_model}')
+        actor_critic = torch.load(f'{base_dir}/{cfg.pretrained_model}', weights_only=False, map_location=device)
         actor_critic = actor_critic.to(device)
     else:
         actor_critic = make_area_coverage_v5_sac_models()

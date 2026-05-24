@@ -13,27 +13,36 @@ authors = [
     { name = "0Pinky0", email = "lpinkyl@126.com" },
 ]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dependencies = [
+    # ── PyTorch 栈(torch 默认 PyPI wheel 自带 CUDA;别的 CUDA 见 README「环境部署」)──
+    "torch == 2.12.0",
+    "torchvision == 0.27.0",
+    "torchcodec == 0.13.0",     # 视频写盘后端(torchrl 0.12 用它替代已移除的 torchvision.io.write_video)
+    "tensordict == 0.12.4",
+    "triton == 3.7.0",
+    # 注意:torchrl 0.12.0 *不*在此列 —— 它的 C++ 扩展(_torchrl.so)需对齐 torch ABI,
+    #       必须从源码安装(git clone + pip install -e + build_ext)。详见 README「环境部署」。
+    # ── 数值 / RL / 环境 ──
+    "numpy == 2.4.6",
+    "gymnasium == 1.3.0",
     "dubins @ git+https://github.com/rdesc/pydubins.git",
-    "gymnasium == 1.2.0",
-    "matplotlib == 3.10.5",
-    "moviepy == 2.2.1",
-    "numpy == 2.1.3",
+    "cupy-cuda13x == 14.1.0",   # 绑定 CUDA 13.x(旧 cupy-cuda12x 对应 CUDA 12)
+    "shapely == 2.1.2",
+    # ── 配置 / 日志 / 可视化 ──
+    "hydra-core == 1.3.2",      # 项目用 Hydra 管理实验(原 pyproject 漏写)
     "omegaconf == 2.3.0",
-    "opencv-python == 4.12.0.88",
+    "wandb == 0.27.0",
+    "tensorboard == 2.20.0",
+    "matplotlib == 3.10.9",
+    "opencv-python == 4.13.0.92",
+    "moviepy == 2.2.1",
+    "av == 15.1.0",
     "pygame == 2.6.1",
-    "shapely == 2.1.1",
-    "tensorboard >= 2.17.0",
-#    "torchrl == 0.9.2",
-#    "torchvision >= 0.19.0",
-    "tqdm == 4.66.5",
-    "wandb == 0.21.1",
-#    "tensordict >= 0.5.0",
-    "pandas",
-    "scipy",
-    "cupy-cuda12x",
-    "av"
+    "pandas == 3.0.3",
+    "scipy == 1.17.1",
+    "tqdm == 4.67.3",
+    "pytest == 9.0.3",          # 项目测试用;且 cupy.testing 惰性 import pytest,缺失会在某些 import 组合下崩
 ]
 
 [tool.pytest.ini_options]

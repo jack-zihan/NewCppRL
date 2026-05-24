@@ -24,7 +24,7 @@ def _load_actor(env_id: str, ckpt_path: str, architecture: str, device: str = "c
     else:
         actor, _ = make_sac_models(env=env, device=device)
 
-    state = torch.load(ckpt_path, map_location=device)
+    state = torch.load(ckpt_path, map_location=device, weights_only=False)
     # ckpt 可能保存 {'actor': state_dict, 'critic': ...} 或直接 ModuleList
     if isinstance(state, dict) and "actor" in state:
         actor.load_state_dict(state["actor"])

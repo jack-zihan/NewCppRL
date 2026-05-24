@@ -54,7 +54,7 @@ class SACTestSession:
     def _load_model(self):
         """Load the SAC model."""
         self.device = self.config['device']
-        actor_critic = torch.load(self.config['model_path'], weights_only=False).to(self.device)
+        actor_critic = torch.load(self.config['model_path'], weights_only=False, map_location=self.device).to(self.device)
         self.actor = actor_critic[0].to(self.device)
 
     def _setup_environment(self):

@@ -21,7 +21,7 @@ def diagnose_and_test_model(model_path):
     
     # 加载模型
     print("\n1. 加载模型...")
-    model = torch.load(model_path, map_location='cpu')
+    model = torch.load(model_path, map_location='cpu', weights_only=False)
     
     # 检查模型结构
     print(f"   模型类型: {type(model)}")
@@ -30,7 +30,7 @@ def diagnose_and_test_model(model_path):
         for i, item in enumerate(model):
             if hasattr(item, '__class__'):
                 class_name = item.__class__.__name__
-                print(f"   [{}] {class_name}")
+                print(f"   [{i}] {class_name}")
                 
                 # 检查是否是TensorDictModule
                 if 'TensorDictModule' in class_name:
