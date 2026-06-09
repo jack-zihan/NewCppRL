@@ -14,7 +14,7 @@ from omegaconf import DictConfig
 from torchrl._utils import logger as torchrl_logger, timeit
 from torchrl.envs.transforms import MultiStepTransform
 from torchrl.data import LazyMemmapStorage, LazyTensorStorage, TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
-from torchrl.collectors import SyncDataCollector, MultiaSyncDataCollector
+from torchrl.collectors import Collector, MultiAsyncCollector
 
 from rl_new.sac_cont_sy.env_utils import make_train_environment
 from rl_new.sac_cont_sy.sac_utils_optimized import set_optimizer_group_lrs
@@ -171,8 +171,8 @@ def apply_phase(phase: Phase, cfg: DictConfig, actor_model: torch.nn.Module, dev
 
 
 def create_collector(cfg, actor_model, device):
-    """创建并行数据采集器（MultiaSyncDataCollector）"""
-    collector = MultiaSyncDataCollector(
+    """创建并行数据采集器（MultiAsyncCollector）"""
+    collector = MultiAsyncCollector(
         create_env_fn=[lambda: make_train_environment(cfg, device='cpu') for _ in range(cfg.collector.num_collectors)],
         policy=actor_model, frames_per_batch=cfg.collector.frames_per_batch, total_frames=cfg.collector.total_frames,
         device=None, policy_device=device, storing_device='cpu', env_device='cpu', max_frames_per_traj=-1)

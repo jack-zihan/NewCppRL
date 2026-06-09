@@ -28,7 +28,7 @@ from omegaconf import DictConfig
 from tensordict import TensorDict
 from tensordict.nn import CudaGraphModule
 from torchrl._utils import compile_with_warmup, logger as torchrl_logger, timeit
-from torchrl.collectors import MultiaSyncDataCollector, aSyncDataCollector
+from torchrl.collectors import MultiAsyncCollector, AsyncCollector
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
 from torchrl.data import LazyMemmapStorage, LazyTensorStorage, TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
@@ -148,7 +148,7 @@ def main(cfg: DictConfig):
         # replay_buffer.empty()
 
         # ============ 5. 创建收集器（同步模式，不传递replay_buffer） ============
-        collector = aSyncDataCollector(
+        collector = AsyncCollector(
             partial(make_train_environment, cfg),
             exploration_policy,
             init_random_frames=0,
@@ -171,7 +171,7 @@ def main(cfg: DictConfig):
 
         # 目前异步无法使用优先级回放，只能使用双缓存机制，这个以后再判断如何解决
         # env_kwargs = dict(cfg.env.env_kwargs) if hasattr(cfg.env, 'env_kwargs') and cfg.env.env_kwargs else {}
-        # collector = MultiaSyncDataCollector(
+        # collector = MultiAsyncCollector(
         #     create_env_fn=[lambda d=dev: make_sac_env(
         #         env_id=cfg.env.env_id,
         #         num_envs=cfg.collector.processes_per_gpu if 'cuda' in str(dev) else 1,

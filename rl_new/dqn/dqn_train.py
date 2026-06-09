@@ -13,7 +13,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 from tensordict.nn import TensorDictSequential
 from torchrl._utils import logger as torchrl_logger
-from torchrl.collectors import MultiaSyncDataCollector
+from torchrl.collectors import MultiAsyncCollector
 from torchrl.data import TensorDictPrioritizedReplayBuffer, LazyMemmapStorage
 from torchrl.envs import MultiStepTransform
 from torchrl.modules import EGreedyModule
@@ -72,7 +72,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
     ).to(device)
 
     # Create the collector
-    collector = MultiaSyncDataCollector(  # 环境是同步运行的
+    collector = MultiAsyncCollector(  # 环境是同步运行的
         create_env_fn=[lambda: make_env(
             num_envs=1,
             device='cpu',

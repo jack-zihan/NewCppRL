@@ -40,7 +40,7 @@ from torchrl._utils import compile_with_warmup, logger as torchrl_logger, timeit
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import SoftUpdate, SACLoss, group_optimizers
 from torchrl.data import LazyMemmapStorage, LazyTensorStorage, TensorDictPrioritizedReplayBuffer, TensorDictReplayBuffer
-from torchrl.collectors import SyncDataCollector, MultiaSyncDataCollector, aSyncDataCollector
+from torchrl.collectors import Collector, MultiAsyncCollector, AsyncCollector
 from torchrl.record.loggers import get_logger
 
 from rl_new.sac_cont_sy.model_utils import make_sac_models
@@ -129,7 +129,7 @@ def main(cfg: DictConfig):  # noqa: F821
         ).append_transform(lambda td: td.to(train_device))  # 采样后传输到训练设备
 
         # Create off-policy collector
-        # collector = SyncDataCollector(
+        # collector = Collector(
         #     create_env_fn=partial(make_train_environment, cfg), policy=actor_critic[0],  # 提取 actor 用于探索
         #     init_random_frames=cfg.collector.init_random_frames, total_frames=cfg.collector.total_frames,
         #     frames_per_batch=cfg.collector.frames_per_batch, max_frames_per_traj=-1,
@@ -139,14 +139,14 @@ def main(cfg: DictConfig):  # noqa: F821
         # )
 
         # Create the collector
-        collector = MultiaSyncDataCollector(
+        collector = MultiAsyncCollector(
             create_env_fn=[lambda: make_train_environment(cfg, device='cpu')] * cfg.collector.num_collectors,
             frames_per_batch=cfg.collector.frames_per_batch, total_frames=cfg.collector.total_frames,
              device=None, policy_device=train_device, storing_device="cpu", env_device="cpu",
             policy=actor_critic[0], max_frames_per_traj=-1,
         )
         #
-        # collector = aSyncDataCollector(
+        # collector = AsyncCollector(
         #     partial(make_train_environment, cfg),
         #     exploration_policy,
         #     init_random_frames=0,

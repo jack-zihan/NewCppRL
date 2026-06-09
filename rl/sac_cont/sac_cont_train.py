@@ -12,7 +12,7 @@ import tqdm
 import yaml
 from omegaconf import DictConfig
 from torchrl._utils import logger as torchrl_logger
-from torchrl.collectors import MultiaSyncDataCollector
+from torchrl.collectors import MultiAsyncCollector
 from torchrl.data import LazyMemmapStorage, TensorDictPrioritizedReplayBuffer
 from torchrl.objectives import SoftUpdate, SACLoss
 from torchrl.record.loggers import get_logger
@@ -72,7 +72,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
         cpu_workers = min(4, mp.cpu_count() - len(gpu_devices) - 2)
         devices = gpu_devices + ['cpu'] * cpu_workers if cpu_workers > 0 else gpu_devices
         
-        collector = MultiaSyncDataCollector(
+        collector = MultiAsyncCollector(
             create_env_fn=[lambda: make_env(
                 num_envs=1,
                 device='cpu',
@@ -86,7 +86,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
         )
     else:
         # 单设备收集（保持原样）
-        collector = MultiaSyncDataCollector(
+        collector = MultiAsyncCollector(
             create_env_fn=[lambda: make_env(
                 num_envs=1,
                 device='cpu',

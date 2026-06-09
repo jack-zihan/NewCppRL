@@ -11,7 +11,7 @@ import tqdm
 import yaml
 from omegaconf import DictConfig
 from torchrl._utils import logger as torchrl_logger
-from torchrl.collectors import MultiaSyncDataCollector
+from torchrl.collectors import MultiAsyncCollector
 from torchrl.data import LazyMemmapStorage, TensorDictPrioritizedReplayBuffer
 from torchrl.objectives import SoftUpdate, DiscreteSACLoss
 from torchrl.record.loggers import get_logger
@@ -61,7 +61,7 @@ def main(cfg: "DictConfig"):  # noqa: F821
     q_critic = actor_critic[1]
 
     # Create the collector
-    collector = MultiaSyncDataCollector(
+    collector = MultiAsyncCollector(
         create_env_fn=[lambda: make_env(
             num_envs=1,
             device='cpu',
