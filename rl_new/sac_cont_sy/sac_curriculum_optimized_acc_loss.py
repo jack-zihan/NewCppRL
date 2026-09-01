@@ -41,7 +41,10 @@ from rl_new.sac_cont_sy.train_utils_optimized import (create_replay_buffer, crea
 from rl_new.sac_cont_sy.model_utils import make_sac_models, make_sac_resnet_dual_models, make_sac_cnn_dual_models
 from rl_new.sac_cont_sy.env_utils import make_train_environment
 from rl_new.sac_cont_sy.async_evaluator import AsyncEvaluator
+from rl_new.hydra_compat import install_hydra_py314_compat
 from torchrl_utils.model.resnet_fpn_dual import HIFReconstructionLoss
+
+install_hydra_py314_compat()
 
 torch.set_float32_matmul_precision("high")
 tensordict.nn.functional_modules._exclude_td_from_pytree().set()

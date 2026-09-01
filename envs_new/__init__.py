@@ -106,30 +106,31 @@ gymnasium.envs.registration.register(
     entry_point="envs_new.cpp_env_v3:CppEnv",
 )
 
-# Import v4 and v5 from their respective modules
-try:
-    from envs_new.cpp_env_v4 import CppEnv as CppEnvV4
-    gymnasium.envs.registration.register(
-        id="NewPasture-v4",
-        entry_point="envs_new.cpp_env_v4:CppEnv",
-    )
-except ImportError:
-    pass  # v4 might not exist in all configurations
+# Import v4/v5/v6 from their respective modules (optional in some configurations).
+import importlib
 
-try:
-    from envs_new.cpp_env_v5 import CppEnv as CppEnvV5
-    gymnasium.envs.registration.register(
-        id="NewPasture-v5",
-        entry_point="envs_new.cpp_env_v5:CppEnv",
-    )
-except ImportError:
-    pass  # v5 might not exist in all configurations
 
-try:
-    from envs_new.cpp_env_v6 import CppEnv as CppEnvV6
+def _register_optional(version: str):
+    """Register NewPasture-v{version} if its module exists; surface real import bugs.
+
+    只有目标模块**确实不存在**（ModuleNotFoundError 且 name 正是该模块）才视为可选、静默跳过；
+    其余 ImportError —— 即一个**已存在**的 cpp_env_v{version} 内部真正的缺依赖/导入 bug ——
+    一律重新抛出，而不是被吞成下游莫名其妙的 "env id not found"（fail-fast：准确报错优于优雅掩盖）。
+    """
+    module = f"envs_new.cpp_env_v{version}"
+    try:
+        mod = importlib.import_module(module)
+    except ModuleNotFoundError as e:
+        if e.name == module:
+            return None  # 该版本模块在当前配置下不存在 —— 真·可选
+        raise  # 模块内部的真实缺依赖/导入错误 —— 暴露出来
     gymnasium.envs.registration.register(
-        id="NewPasture-v6",
-        entry_point="envs_new.cpp_env_v6:CppEnv",
+        id=f"NewPasture-v{version}",
+        entry_point=f"{module}:CppEnv",
     )
-except ImportError:
-    pass  # v6 might not exist in all configurations
+    return mod.CppEnv
+
+
+CppEnvV4 = _register_optional("4")
+CppEnvV5 = _register_optional("5")
+CppEnvV6 = _register_optional("6")

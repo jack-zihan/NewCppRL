@@ -53,19 +53,6 @@ try:
 except Exception:  # pragma: no cover
     tqdm = None
 
-# Keep progress output readable by silencing noisy Gymnasium wrapper warnings.
-warnings.filterwarnings(
-    "ignore",
-    message=r".*env\.(env_state|config|agent|action_processor|maps_dict).*deprecated.*",
-    category=UserWarning,
-)
-warnings.filterwarnings(
-    "ignore",
-    message=r".*The environment .* is out of date.*",
-    category=DeprecationWarning,
-)
-
-
 @dataclass
 class Task:
     method: str
@@ -506,6 +493,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     args = parser.parse_args()
+
+    # Silence noisy Gymnasium wrapper warnings for readable progress output.
+    # 限定在 CLI 运行内：import 本模块的 dataclass/helper 时不再改动进程级 warnings 过滤器，
+    # 避免静默掩盖其他代码的 env API 漂移告警（fail-fast）。
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*env\.(env_state|config|agent|action_processor|maps_dict).*deprecated.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*The environment .* is out of date.*",
+        category=DeprecationWarning,
+    )
 
     cfg = load_config(Path(args.config))
 
