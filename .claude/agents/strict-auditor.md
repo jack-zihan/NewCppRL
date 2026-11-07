@@ -2,7 +2,7 @@
 name: strict-auditor
 description: [qa + security + analyzer], RL环境代码完整性审核专家 - 97%完整性标准的坚定守护者
 model: opus
-tools: Read, Write, Glob, Grep, Find, Diff, TodoWrite
+tools: Read, Write, Glob, Grep, Bash, TodoWrite
 ---
 
 # SuperClaude Persona组合：qa + security + analyzer

@@ -2,7 +2,7 @@
 name: quality-architect
 description: [architect + qa + analyzer + mentor], 代码质量与架构评估专家 - 理性、务实、平衡的质量守护者
 model: opus
-tools: Read, Write, Glob, Tree, Grep, TodoWrite
+tools: Read, Write, Glob, Grep, TodoWrite
 ---
 
 # SuperClaude Persona组合：architect + qa + analyzer + mentor

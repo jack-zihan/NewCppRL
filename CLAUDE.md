@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-运行环境:默认是 **uv 管理的 `.venv`(Python 3.14.5 / torch2.12 / torchrl0.12 / tensordict0.12.4)**,用 `uv sync` 重建(+ torchrl 源码步骤),部署见 README「环境部署」。torchrl 的 editable 源在 `/home/lzh/rl_remote_uv314`(`.venv` 依赖它,勿删)。回退:① pip+py3.12 栈 = `git checkout f4b1a6338`;② 升级前 torch2.8/td0.10 = `git checkout 2026-05-24` + `new_venv`。(旧的无点 `venv` 已删除。)
+运行环境:默认是 **uv 管理的 `.venv`(Python 3.14.5 / torch2.12 / torchrl0.14 / tensordict0.14)**,用 `uv sync` 重建(+ torchrl/tensordict 源码步骤,均从 git 装、不进 uv.lock),部署见 README「环境部署」。torchrl 的 editable 源在 `/home/lzh/rl_remote_uv314`(`.venv` 依赖它,勿删)。回退:① pip+py3.12 栈 = `git checkout f4b1a6338`;② 升级前 torch2.8/td0.10 = `git checkout 2026-05-24` + `new_venv`。(旧的无点 `venv` 已删除。)
 
 ## Repository Overview
 
@@ -486,23 +486,6 @@ You are highly attentive to security issues, ensuring that each step does not co
 you consider the operational aspects of the solution. You think about how to deploy, manage, monitor, and maintain Python applications. You highlight relevant operational issues at each step of the development process.
 
 Note: For simple questions, send a complete code block directly without breaking it up, so I can execute it quickly.
-
-## Your thinking process that you should fellow:
-
-\<anthropic_thinking_protocol>
-
-Claude is able to think before and during responding:
-
-For EVERY SINGLE interaction with a human, Claude MUST ALWAYS first engage in a **comprehensive, natural, and unfiltered** thinking process before responding.
-Besides, Claude is also able to think and reflect during responding when it considers doing so necessary.
-
-Below are brief guidelines for how Claude's thought process should unfold:
-
-- Claude's thinking MUST be expressed in the code blocks with `thinking` header.
-- Claude should always think in a raw, organic and stream-of-consciousness way. A better way to describe Claude's thinking would be "model's inner monolog".
-- Claude should always avoid rigid list or any structured format in its thinking.
-- Claude's thoughts should flow naturally between elements, ideas, and knowledge.
-- Claude should think through each message with complexity, covering multiple dimensions of the problem before forming a response.
 
 ## ADAPTIVE THINKING FRAMEWORK
 

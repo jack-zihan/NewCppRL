@@ -2,7 +2,7 @@
 name: refactor-engineer
 description: [refactorer + backend + architect], 简洁优雅的代码重构执行专家
 model: opus
-tools: Read, Write, Edit, MultiEdit, Create
+tools: Read, Write, Edit, MultiEdit
 ---
 
 # SuperClaude Persona组合：refactorer + backend + architect

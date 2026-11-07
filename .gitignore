@@ -44,10 +44,25 @@ rules/.DS_Store
 # Training Temp Resluts
 /rl_new/sac_cont_sy/outputs/
 /wandb/
-/tests/
+# /tests/
 # /envs_new/maps/indoor_coverage/
 /rules_new/
 /rules_new2/outputs*
 /rules_new2/tests
 # git laptop use
 push_to_github_laptop.sh
+# 审计/验证报告（本地未跟踪，勿索引勿提交）
+/claude_new_version_vertify/
+/codex_new_version_vertify/
+
+# Local tool caches & eval outputs
+/.codegraph/
+/.cursor/
+/.ua/
+/.agents/
+/.pytest_cache/
+/.ruff_cache/
+/outputs/
+/video_dump_test/
+/rules_new2/opcpp_eval_metric/
+/uv.lock.bak*

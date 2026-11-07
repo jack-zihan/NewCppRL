@@ -16,33 +16,34 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     # ── PyTorch 栈(torch 默认 PyPI wheel 自带 CUDA;别的 CUDA 见 README「环境部署」)──
-    "torch == 2.12.0",
-    "torchvision == 0.27.0",
-    "torchcodec == 0.13.0",     # 视频写盘后端(torchrl 0.12 用它替代已移除的 torchvision.io.write_video)
-    "tensordict == 0.12.4",
-    "triton == 3.7.0",
-    # 注意:torchrl *不*在此(也不进 uv.lock)—— 它的 C++ 扩展须对齐已装 torch 的 ABI 现编,
-    #       uv lock 在 metadata 阶段拿不到 torch/setuptools(鸡生蛋)。改为 `uv sync` 后的源码步骤,见 README。
+    "torch == 2.15.0",
+    "torchvision == 0.29.1",
+    "torchcodec == 0.17.0",     # 视频写盘后端(torchrl 用它替代已移除的 torchvision.io.write_video)
+    "triton == 3.9.0",
+    # 注意:torchrl 和 tensordict *都不*在此(也不进 uv.lock)—— 它们的 C++ 扩展须对齐已装 torch 的 ABI 现编;
+    #       且 tensordict 0.13.0 PyPI 还没 wheel、只有 git 源,uv lock 在 metadata 阶段拿不到 torch/setuptools(鸡生蛋)。
+    #       二者都改为 `uv sync` 后的源码步骤(见 README)。⚠️把 tensordict 写回 lock 只会让 uv run/sync 反复把它退回旧 wheel。
     # ── 数值 / RL / 环境 ──
-    "numpy == 2.4.6",
-    "gymnasium == 1.3.0",
+    "numpy == 2.5.4",
+    "gymnasium == 1.4.0",
     "dubins @ git+https://github.com/rdesc/pydubins.git",
-    "cupy-cuda13x == 14.1.0",   # 绑定 CUDA 13.x(旧 cupy-cuda12x 对应 CUDA 12)
-    "shapely == 2.1.2",
+    "cupy-cuda13x == 14.2.0",   # 绑定 CUDA 13.x(旧 cupy-cuda12x 对应 CUDA 12)
+    "shapely == 2.2.0",
     # ── 配置 / 日志 / 可视化 ──
-    "hydra-core == 1.3.2",      # 项目用 Hydra 管理实验(原 pyproject 漏写)
-    "omegaconf == 2.3.0",
-    "wandb == 0.27.0",
-    "tensorboard == 2.20.0",
-    "matplotlib == 3.10.9",
-    "opencv-python == 4.13.0.92",
+    "hydra-core == 1.3.8",      # 项目用 Hydra 管理实验(原 pyproject 漏写)
+    "omegaconf == 2.3.1",
+    "wandb == 0.31.0",
+    "tensorboard == 2.21.0",
+    "matplotlib == 3.11.2",
+    "opencv-python == 5.0.0.93",
     "moviepy == 2.2.1",
-    "av == 15.1.0",
+    "av == 19.0.2",
     "pygame == 2.6.1",
-    "pandas == 3.0.3",
-    "scipy == 1.17.1",
-    "tqdm == 4.67.3",
-    "pytest == 9.0.3",          # 项目测试用;且 cupy.testing 惰性 import pytest,缺失会在某些 import 组合下崩
+    "pandas == 3.1.0",
+    "scipy == 1.18.1",
+    "tqdm == 4.70.1",
+    "pytest == 9.2.0",          # 项目测试用;且 cupy.testing 惰性 import pytest,缺失会在某些 import 组合下崩
+    "scipy-stubs~=1.18.1",
 ]
 
 [tool.pytest.ini_options]
@@ -63,13 +64,13 @@ python_functions = ["test_*"]
 
 # ── uv 管理(默认环境;py3.14 新栈)──
 [[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true   # 仅 torch/torchvision 用它(下面 sources 显式指定),其余走 PyPI
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu130" }
-torchvision = { index = "pytorch-cu130" }
+torch = { index = "pytorch-cu132" }
+torchvision = { index = "pytorch-cu132" }
 
 [tool.uv.extra-build-dependencies]
 # dubins 的 git 源在 py≥3.13 必须用 cython 重新生成 .c(否则仓库里过时的预生成 .c 编不过)。

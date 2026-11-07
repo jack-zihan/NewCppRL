@@ -22,8 +22,8 @@ from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 
-import os
-os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '/usr/lib/x86_64-linux-gnu/qt5/plugins'
+# 仅在未设置时提供 Qt 插件路径默认值，不无条件覆盖用户/系统已有的全局 env（os 已在顶部导入）。
+os.environ.setdefault('QT_QPA_PLATFORM_PLUGIN_PATH', '/usr/lib/x86_64-linux-gnu/qt5/plugins')
 
 # Try to import cpu_apf_bool, provide fallback if not available
 try:

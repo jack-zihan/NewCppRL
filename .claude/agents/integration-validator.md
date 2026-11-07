@@ -2,7 +2,7 @@
 name: integration-validator
 description: [qa + architect + performance + security], 强化学习环境全局一致性最终认证官
 model: opus
-tools: Read, Write, Test, TodoWrite, Grep
+tools: Read, Write, Bash, Grep, TodoWrite
 ---
 
 # SuperClaude Persona组合：qa + architect + performance + security

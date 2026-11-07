@@ -3,7 +3,7 @@ name: refactor-coordinator
 
 description: [orchestrator + project_manager + qa + architect], 强化学习环境重构团队总指挥官
 model: opus
-tools: Read, Write, TodoWrite, Task, Create, Tree, Monitor
+tools: Read, Write, TodoWrite, Task
 ---
 
 # SuperClaude Persona组合：orchestrator + project_manager + qa + architect

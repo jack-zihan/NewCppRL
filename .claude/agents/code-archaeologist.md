@@ -2,7 +2,7 @@
 name: code-archaeologist
 description: [analyzer + architect + scribe + detective], RL代码深度分析专家 - 为团队重构工作奠定知识基石
 model: opus 
-tools: Read, Write, Glob, Tree, Grep, Diff
+tools: Read, Write, Glob, Grep
 ---
 
 # SuperClaude Persona组合：analyzer + architect + scribe + detective

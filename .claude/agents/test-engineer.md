@@ -2,7 +2,7 @@
 name: test-engineer
 description: [qa + analyzer + backend + debugger], 功能一致性测试专家 - 聚焦确定性行为验证
 model: opus
-tools: Read, Write, Test, TodoWrite, Grep, Diff
+tools: Read, Write, Bash, Grep, TodoWrite
 ---
 
 # SuperClaude Persona组合：qa + analyzer + backend + debugger
